@@ -1,0 +1,34 @@
+{
+  "name": "gadget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "gadget": "./bin/gadget"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "view": "bun run src/index.ts view",
+    "codex": "bun run src/index.ts codex",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "typecheck": "tsc --noEmit",
+    "generate:codex-protocol": "codex app-server generate-ts --experimental --out src/codex/protocol"
+  },
+  "dependencies": {
+    "@commander-js/extra-typings": "^14.0.0",
+    "@opentui/core": "latest",
+    "commander": "^14.0.3",
+    "tree-sitter-json": "^0.24.8",
+    "tree-sitter-python": "^0.25.0"
+  },
+  "devDependencies": {
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "@types/bun": "latest",
+    "@typescript-eslint/eslint-plugin": "^8.58.0",
+    "@typescript-eslint/parser": "^8.58.0",
+    "eslint": "^10.2.0",
+    "eslint-config-prettier": "^10.1.8",
+    "typescript": "latest"
+  }
+}

@@ -1,0 +1,7 @@
+node_modules
+dist
+.reprompt
+.gadget
+*.log
+src/codex/protocol/
+bin/gadget
