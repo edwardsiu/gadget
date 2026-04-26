@@ -1726,7 +1726,12 @@ class GadgetUi {
       if (row.expanded) {
         this.fileTreeExpandedDirs = new Set([...this.fileTreeExpandedDirs].filter((path) => path !== row.path && !path.startsWith(`${row.path}/`)));
       } else {
-        this.fileTreeExpandedDirs = new Set([...this.fileTreeExpandedDirs, ...this.folderPathAncestors(row.path), row.path]);
+        const peerDirs = [...this.fileTreeExpandedDirs].filter((path) => path !== row.path && this.folderDepth(path) === row.depth);
+        this.fileTreeExpandedDirs = new Set([
+          ...[...this.fileTreeExpandedDirs].filter((path) => !peerDirs.some((peerPath) => path === peerPath || path.startsWith(`${peerPath}/`))),
+          ...this.folderPathAncestors(row.path),
+          row.path,
+        ]);
       }
       this.fileTreeRows = this.buildFileTreeRows();
       this.clampFileTreeScrollOffset();
@@ -1751,7 +1756,7 @@ class GadgetUi {
     }
 
     const rows: FileTreeRow[] = [];
-    const visit = (node: Map<string, unknown>, prefix: string, depth: number, guideColumns: boolean[]) => {
+    const visit = (node: Map<string, unknown>, prefix: string, depth: number) => {
       const entries = [...node.entries()].sort(([aName, aValue], [bName, bValue]) => {
         const aFolder = aValue instanceof Map && (aValue as Map<string, unknown>).size > 0;
         const bFolder = bValue instanceof Map && (bValue as Map<string, unknown>).size > 0;
@@ -1760,23 +1765,22 @@ class GadgetUi {
         }
         return aName.localeCompare(bName);
       });
-      entries.forEach(([name, value], entryIndex) => {
+      for (const [name, value] of entries) {
         const path = prefix ? `${prefix}/${name}` : name;
         const child = value as Map<string, unknown>;
-        const childGuideColumns = [...guideColumns, entryIndex < entries.length - 1];
         const isFolder = child.size > 0 && paths.some((filePath) => filePath.startsWith(`${path}/`));
         if (!isFolder) {
-          rows.push({ type: "file", path, name, depth, guideColumns, selected: path === selectedFilePath });
-          return;
+          rows.push({ type: "file", path, name, depth, selected: path === selectedFilePath });
+          continue;
         }
         const expanded = this.fileTreeExpandedDirs.has(path);
-        rows.push({ type: "folder", path, name, depth, guideColumns, expanded });
+        rows.push({ type: "folder", path, name, depth, expanded });
         if (expanded) {
-          visit(child, path, depth + 1, childGuideColumns);
+          visit(child, path, depth + 1);
         }
-      });
+      }
     };
-    visit(root, "", 0, []);
+    visit(root, "", 0);
     return rows;
   }
 
@@ -1797,6 +1801,10 @@ class GadgetUi {
       ancestors.push(parts.slice(0, index + 1).join("/"));
     }
     return ancestors;
+  }
+
+  private folderDepth(path: string): number {
+    return Math.max(0, path.split("/").filter(Boolean).length - 1);
   }
 
   private selectFileFromModal(index: number): void {

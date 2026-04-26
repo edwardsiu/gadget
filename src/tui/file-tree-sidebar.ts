@@ -3,8 +3,8 @@ import { COLORS, DIFF_BORDER_FG, NAV_BORDER } from "./theme";
 import { appendPlainChunk, appendStyledChunk, truncateToWidth } from "./text";
 
 export type FileTreeRow =
-  | { type: "folder"; path: string; name: string; depth: number; guideColumns: boolean[]; expanded: boolean }
-  | { type: "file"; path: string; name: string; depth: number; guideColumns: boolean[]; selected: boolean };
+  | { type: "folder"; path: string; name: string; depth: number; expanded: boolean }
+  | { type: "file"; path: string; name: string; depth: number; selected: boolean };
 
 export class FileTreeSidebar {
   readonly renderable: TextRenderable;
@@ -136,23 +136,10 @@ function appendFileTreeBottomBorder(chunks: TextChunk[], width: number): void {
 function appendFileTreeRow(chunks: TextChunk[], row: FileTreeRow, width: number): void {
   const bg = row.type === "file" && row.selected ? COLORS.selected : COLORS.panel;
   const marker = row.type === "folder" ? (row.expanded ? "▾ " : "▸ ") : "  ";
+  const indent = "  ".repeat(row.depth);
   const label = row.type === "folder" ? `${marker}${row.name}/` : `${marker}${row.name}`;
-  const guidePrefix = row.guideColumns.map((hasNextSibling) => (hasNextSibling ? " ▕" : "  ")).join("");
-  const value = truncateToWidth(`${guidePrefix}${label}`, width);
-  const guideWidth = Math.min(guidePrefix.length, value.length);
-  const labelWidth = value.length - guideWidth;
-  const paddingWidth = Math.max(0, width - value.length);
   appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
-  if (guideWidth > 0) {
-    appendStyledChunk(chunks, value.slice(0, guideWidth), { fg: COLORS.muted, bg });
-  }
-  if (labelWidth > 0) {
-    appendStyledChunk(chunks, value.slice(guideWidth), {
-      fg: row.type === "folder" ? COLORS.statInfo : row.selected ? "#ffffff" : COLORS.text,
-      bg,
-    });
-  }
-  appendStyledChunk(chunks, " ".repeat(paddingWidth), {
+  appendStyledChunk(chunks, truncateToWidth(`${indent}${label}`, width).padEnd(width), {
     fg: row.type === "folder" ? COLORS.statInfo : row.selected ? "#ffffff" : COLORS.text,
     bg,
   });
