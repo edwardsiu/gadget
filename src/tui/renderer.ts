@@ -22,7 +22,7 @@ export type GadgetRendererCallbacks = {
   navWidth: () => number;
   onNavFileMouseDown: (row: number) => void;
   onNavScroll: (direction: "up" | "down" | "left" | "right" | undefined, shift: boolean) => void;
-  onDiffTopBarMouseDown: () => void;
+  onDiffBottomBarMouseDown: () => void;
   onDiffScroll: (direction: "up" | "down" | "left" | "right" | undefined, shift: boolean) => void;
   onSelectFile: (index: number) => void;
   onFileModalScroll: (delta: number) => void;
@@ -107,11 +107,6 @@ export class GadgetRenderer {
       bg: COLORS.bg,
       content: "",
       selectable: false,
-      onMouseDown: (event) => {
-        if (event.button === MouseButton.LEFT) {
-          callbacks.onDiffTopBarMouseDown();
-        }
-      },
     });
 
     this.diffScroll = new ScrollBoxRenderable(renderer, {
@@ -136,6 +131,11 @@ export class GadgetRenderer {
       bg: COLORS.panel,
       content: "",
       selectable: false,
+      onMouseDown: (event) => {
+        if (event.button === MouseButton.LEFT) {
+          callbacks.onDiffBottomBarMouseDown();
+        }
+      },
     });
 
     this.diffDockSpacer = new TextRenderable(renderer, {

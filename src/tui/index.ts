@@ -229,7 +229,7 @@ class GadgetUi {
           this.scrollNav(scrollDirection === "down" ? 1 : -1);
         }
       },
-      onDiffTopBarMouseDown: () => this.openFileModal(),
+      onDiffBottomBarMouseDown: () => this.openFileModal(),
       onDiffScroll: (direction, shift) => {
         if (this.mode === "comment" || !isVerticalScroll(direction, shift)) {
           return;
