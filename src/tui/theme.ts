@@ -41,6 +41,8 @@ export const HELP_MODAL_WIDTH = 56;
 export const HELP_MODAL_ROWS = [
   "J            Down",
   "K            Up",
+  "G            First line",
+  "Shift+G      Last line",
   "Shift+J      Page down",
   "Shift+K      Page up",
   "H            Previous file",

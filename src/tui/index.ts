@@ -502,6 +502,12 @@ class GadgetUi {
       case "lineDown":
         this.selectLine(this.selectedLineIndex + 1);
         return;
+      case "firstLine":
+        this.selectLine(0);
+        return;
+      case "lastLine":
+        this.selectLine(this.selectedLines().length - 1);
+        return;
       case "pageUp":
         this.pageLines(-1);
         return;

@@ -6,6 +6,8 @@ export type MainInputAction =
   | { type: "cancel" }
   | { type: "lineUp" }
   | { type: "lineDown" }
+  | { type: "firstLine" }
+  | { type: "lastLine" }
   | { type: "pageUp" }
   | { type: "pageDown" }
   | { type: "previousFile" }
@@ -69,6 +71,10 @@ export function mainActionFromRaw(sequence: string): MainInputAction | null {
     case "\u001b[B":
     case "j":
       return { type: "lineDown" };
+    case "g":
+      return { type: "firstLine" };
+    case "G":
+      return { type: "lastLine" };
     case "K":
     case "\u001b[5~":
       return { type: "pageUp" };
@@ -123,6 +129,9 @@ export function mainActionFromKey(key: KeyEvent): MainInputAction | null {
   if ((key.shift && key.name === "r") || key.sequence === "R") {
     return { type: "replyAgentTurn" };
   }
+  if ((key.shift && key.name === "g") || key.sequence === "G") {
+    return { type: "lastLine" };
+  }
 
   switch (key.name || key.sequence) {
     case "escape":
@@ -136,6 +145,10 @@ export function mainActionFromKey(key: KeyEvent): MainInputAction | null {
     case "down":
     case "j":
       return { type: "lineDown" };
+    case "g":
+      return { type: "firstLine" };
+    case "G":
+      return { type: "lastLine" };
     case "K":
     case "pageup":
       return { type: "pageUp" };
