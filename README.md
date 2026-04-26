@@ -39,6 +39,10 @@ gadget --help
 # Open the diff viewer and connect to a matching live session when possible.
 gadget
 
+# Open a single file in full-file view, optionally at a line.
+gadget some/file.txt
+gadget some/file.txt:50
+
 # Start Codex with Gadget app-server integration.
 gadget codex
 

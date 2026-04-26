@@ -106,6 +106,10 @@ type ScratchpadCommentTarget = {
   key: string;
   lineNumber: number;
 };
+export type InitialFileTarget = {
+  filePath: string;
+  lineNumber?: number;
+};
 
 registerAdditionalSyntaxParsers();
 
@@ -113,8 +117,9 @@ export async function runGadgetUi(options: {
   cwd: string;
   adapter: AgentAdapter;
   worktree?: WorktreeInfo;
+  initialFile?: InitialFileTarget;
 }): Promise<void> {
-  const app = new GadgetUi(options.cwd, options.adapter, options.worktree);
+  const app = new GadgetUi(options.cwd, options.adapter, options.worktree, options.initialFile);
   await app.start();
   await new Promise<void>(() => undefined);
 }
@@ -194,6 +199,7 @@ class GadgetUi {
     private readonly cwd: string,
     private readonly adapter: AgentAdapter,
     private readonly initialWorktree?: WorktreeInfo,
+    private readonly initialFile?: InitialFileTarget,
   ) {
     this.state = {
       cwd: initialWorktree?.cwd ?? cwd,
@@ -255,6 +261,7 @@ class GadgetUi {
     });
 
     await Promise.all([connectPromise, trackedDiffPromise]);
+    await this.openInitialFileTarget();
     void this.refreshDiffAndRender().catch((error) => this.setStatus(error.message));
     void this.refreshGitHubDiffBase().catch(() => undefined);
   }
@@ -2274,6 +2281,38 @@ class GadgetUi {
     await this.refreshCurrentFileView(this.state.files[fileIndex]!);
     this.setStatus(`opened ${filePath}`);
     this.renderAll();
+  }
+
+  private async openInitialFileTarget(): Promise<void> {
+    if (!this.initialFile) {
+      return;
+    }
+
+    const filePath = this.initialFile.filePath;
+    this.openedFilePaths.add(filePath);
+    this.ensureOpenedFilesInState();
+    const fileIndex = this.state.files.findIndex((file) => file.filePath === filePath);
+    if (fileIndex < 0) {
+      this.setStatus(`could not open ${filePath}`);
+      return;
+    }
+
+    this.mode = "none";
+    this.input = "";
+    this.closeOverlays();
+    this.selectedFileIndex = fileIndex;
+    this.fileViewMode = "file";
+    this.revealSelectedLine = true;
+    this.pinSelectedLineToTop = false;
+    this.centerSelectedLineInViewport = true;
+    this.revealSelectedFileInNav();
+    this.revealSelectedFileInModal();
+    await this.refreshCurrentFileView(this.state.files[fileIndex]!);
+    const targetLine = this.initialFile.lineNumber ?? 1;
+    this.selectedLineIndex = clamp(targetLine - 1, 0, Math.max(0, this.selectedLines().length - 1));
+    this.setStatus(targetLine > 1 ? `opened ${filePath}:${targetLine}` : `opened ${filePath}`);
+    this.renderAll();
+    this.deferCenterSelectedLineInViewport(filePath, selectedCurrentLineNumber(this.selectedLine()) ?? targetLine);
   }
 
   private ensureOpenedFilesInState(): void {

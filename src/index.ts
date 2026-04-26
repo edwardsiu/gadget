@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 import { createInterface } from "node:readline/promises";
+import { resolve } from "node:path";
 import { Command, InvalidArgumentError } from "@commander-js/extra-typings";
 import { ClipboardAdapter } from "./adapters/clipboard-adapter";
 import { cleanupGadgetResources, type GadgetCleanupResult } from "./adapters/codex-app-server-adapter";
 import { assertGitRepo, createGadgetWorktree, resolveWorktreeTarget, type WorktreeInfo } from "./git";
 import { createCodexRuntimeAdapter, listCodexRuntimeSessions, startCodexRuntime } from "./runtimes/codex";
 import type { RuntimeSession } from "./runtimes/types";
-import { runGadgetUi } from "./tui";
+import { runGadgetUi, type InitialFileTarget } from "./tui";
 
 type CommandTarget = {
   worktree: WorktreeInfo;
@@ -25,9 +26,15 @@ program
   .enablePositionalOptions()
   .showHelpAfterError()
   .allowExcessArguments(false)
+  .argument("[file]", "open a file in full-file view, optionally with :line")
   .option("--worktree <name-or-path>", "open the diff viewer for a specific git worktree")
-  .action(async (options) => {
-    await openDiffViewer({ mode: "auto", worktree: options.worktree });
+  .action(async (file, options) => {
+    const initialFile = parseInitialFileTarget(file);
+    await openDiffViewer({
+      mode: "auto",
+      worktree: options.worktree,
+      ...(initialFile ? { initialFile } : {}),
+    });
   });
 
 program
@@ -119,13 +126,18 @@ async function worktreeCommand(options: { worktreeName: string | undefined; star
   });
 }
 
-async function openDiffViewer(options: { mode: DiffMode; worktree: string | undefined }): Promise<void> {
+async function openDiffViewer(options: { mode: DiffMode; worktree: string | undefined; initialFile?: InitialFileTarget }): Promise<void> {
   const target = await resolveCommandTargetOrExit(options.worktree);
   await ensureGitRepo(target.worktree.cwd);
   const runTarget = await resolveDiffRunTarget(target, options.mode);
 
   if (runTarget.kind === "clipboard") {
-    await runGadgetUi({ cwd: runTarget.cwd, adapter: new ClipboardAdapter(), worktree: runTarget.worktree });
+    await runGadgetUi({
+      cwd: runTarget.cwd,
+      adapter: new ClipboardAdapter(),
+      worktree: runTarget.worktree,
+      ...(options.initialFile ? { initialFile: options.initialFile } : {}),
+    });
     return;
   }
 
@@ -133,6 +145,7 @@ async function openDiffViewer(options: { mode: DiffMode; worktree: string | unde
     cwd: runTarget.cwd,
     adapter: createAdapterForSession(runTarget.session),
     ...(runTarget.worktree ? { worktree: runTarget.worktree } : {}),
+    ...(options.initialFile ? { initialFile: options.initialFile } : {}),
   });
 }
 
@@ -240,6 +253,23 @@ function startOptions(model: string | undefined, resumeSessionId: string | undef
   return {
     ...modelOptions(model),
     ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
+  };
+}
+
+function parseInitialFileTarget(value: string | undefined): InitialFileTarget | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const match = /^(.*):([1-9]\d*)$/.exec(value);
+  if (!match) {
+    return { filePath: resolve(process.cwd(), value) };
+  }
+
+  const filePath = match[1]!;
+  return {
+    filePath: resolve(process.cwd(), filePath),
+    lineNumber: Number(match[2]),
   };
 }
 
