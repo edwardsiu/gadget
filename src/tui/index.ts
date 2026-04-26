@@ -1747,7 +1747,7 @@ class GadgetUi {
     }
 
     const rows: FileTreeRow[] = [];
-    const visit = (node: Map<string, unknown>, prefix: string, depth: number) => {
+    const visit = (node: Map<string, unknown>, prefix: string, depth: number, guideColumns: boolean[]) => {
       const entries = [...node.entries()].sort(([aName, aValue], [bName, bValue]) => {
         const aFolder = aValue instanceof Map && (aValue as Map<string, unknown>).size > 0;
         const bFolder = bValue instanceof Map && (bValue as Map<string, unknown>).size > 0;
@@ -1756,22 +1756,23 @@ class GadgetUi {
         }
         return aName.localeCompare(bName);
       });
-      for (const [name, value] of entries) {
+      entries.forEach(([name, value], entryIndex) => {
         const path = prefix ? `${prefix}/${name}` : name;
         const child = value as Map<string, unknown>;
+        const childGuideColumns = [...guideColumns, entryIndex < entries.length - 1];
         const isFolder = child.size > 0 && paths.some((filePath) => filePath.startsWith(`${path}/`));
         if (!isFolder) {
-          rows.push({ type: "file", path, name, depth, selected: path === selectedFilePath });
-          continue;
+          rows.push({ type: "file", path, name, depth, guideColumns, selected: path === selectedFilePath });
+          return;
         }
         const expanded = this.fileTreeExpandedDirs.has(path);
-        rows.push({ type: "folder", path, name, depth, expanded });
+        rows.push({ type: "folder", path, name, depth, guideColumns, expanded });
         if (expanded) {
-          visit(child, path, depth + 1);
+          visit(child, path, depth + 1, childGuideColumns);
         }
-      }
+      });
     };
-    visit(root, "", 0);
+    visit(root, "", 0, []);
     return rows;
   }
 
