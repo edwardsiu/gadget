@@ -1723,7 +1723,11 @@ class GadgetUi {
 
   private async handleFileTreeRow(row: FileTreeRow): Promise<void> {
     if (row.type === "folder") {
-      this.fileTreeExpandedDirs = new Set([...this.folderPathAncestors(row.path), row.path]);
+      if (row.expanded) {
+        this.fileTreeExpandedDirs = new Set([...this.fileTreeExpandedDirs].filter((path) => path !== row.path && !path.startsWith(`${row.path}/`)));
+      } else {
+        this.fileTreeExpandedDirs = new Set([...this.fileTreeExpandedDirs, ...this.folderPathAncestors(row.path), row.path]);
+      }
       this.fileTreeRows = this.buildFileTreeRows();
       this.clampFileTreeScrollOffset();
       this.renderAll();
