@@ -58,7 +58,6 @@ export class FileTreeSidebar {
     width: number;
     height: number;
     loading: boolean;
-    currentFilePath: string;
   }): void {
     this.renderable.visible = options.open;
     this.renderable.width = options.open ? options.width : 0;
@@ -77,7 +76,6 @@ export class FileTreeSidebar {
       width: options.width,
       height: options.height,
       loading: options.loading,
-      currentFilePath: options.currentFilePath,
     });
   }
 
@@ -92,7 +90,6 @@ function formatFileTreeSidebar(options: {
   width: number;
   height: number;
   loading: boolean;
-  currentFilePath: string;
 }): StyledText {
   const chunks: TextChunk[] = [];
   const innerWidth = Math.max(1, options.width - 2);
@@ -112,7 +109,7 @@ function formatFileTreeSidebar(options: {
     }
   }
   appendPlainChunk(chunks, "\n");
-  appendFileTreeBottomBorder(chunks, innerWidth, options.currentFilePath);
+  appendFileTreeBottomBorder(chunks, innerWidth);
   return new StyledText(chunks);
 }
 
@@ -130,18 +127,9 @@ function appendFileTreeTopBorder(chunks: TextChunk[], width: number): void {
   appendStyledChunk(chunks, NAV_BORDER.topRight, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
 }
 
-function appendFileTreeBottomBorder(chunks: TextChunk[], width: number, currentFilePath: string): void {
-  const label = truncateToWidth(currentFilePath, Math.max(0, width - 3));
+function appendFileTreeBottomBorder(chunks: TextChunk[], width: number): void {
   appendStyledChunk(chunks, NAV_BORDER.bottomLeft, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
-  if (label) {
-    appendStyledChunk(chunks, NAV_BORDER.horizontal, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
-    appendStyledChunk(chunks, " ", { bg: COLORS.panel });
-    appendStyledChunk(chunks, label, { fg: COLORS.statSelected, bg: COLORS.panel });
-    appendStyledChunk(chunks, " ", { bg: COLORS.panel });
-    appendStyledChunk(chunks, NAV_BORDER.horizontal.repeat(Math.max(0, width - label.length - 3)), { fg: DIFF_BORDER_FG, bg: COLORS.panel });
-  } else {
-    appendStyledChunk(chunks, NAV_BORDER.horizontal.repeat(width), { fg: DIFF_BORDER_FG, bg: COLORS.panel });
-  }
+  appendStyledChunk(chunks, NAV_BORDER.horizontal.repeat(width), { fg: DIFF_BORDER_FG, bg: COLORS.panel });
   appendStyledChunk(chunks, NAV_BORDER.bottomRight, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
 }
 

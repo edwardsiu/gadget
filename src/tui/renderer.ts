@@ -261,7 +261,6 @@ export class GadgetRenderer {
     rows: FileTreeRow[];
     scrollOffset: number;
     loading: boolean;
-    currentFilePath: string;
   }): void {
     this.fileTreeSidebar.render({
       ...options,

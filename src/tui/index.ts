@@ -843,7 +843,6 @@ class GadgetUi {
       rows: this.fileTreeRows,
       scrollOffset: this.fileTreeScrollOffset,
       loading: this.searchableFilesRefreshing && !this.searchableFilesLoaded,
-      currentFilePath: this.selectedFile()?.filePath ?? "no file",
     });
   }
 
