@@ -137,7 +137,7 @@ function appendFileTreeRow(chunks: TextChunk[], row: FileTreeRow, width: number)
   const bg = row.type === "file" && row.selected ? COLORS.selected : COLORS.panel;
   const marker = row.type === "folder" ? (row.expanded ? "▾ " : "▸ ") : "  ";
   const label = row.type === "folder" ? `${marker}${row.name}/` : `${marker}${row.name}`;
-  const guidePrefix = row.guideColumns.map((hasNextSibling) => (hasNextSibling ? "│ " : "  ")).join("");
+  const guidePrefix = row.guideColumns.map((hasNextSibling) => (hasNextSibling ? " │" : "  ")).join("");
   const value = truncateToWidth(`${guidePrefix}${label}`, width);
   const guideWidth = Math.min(guidePrefix.length, value.length);
   const labelWidth = value.length - guideWidth;
