@@ -32,6 +32,7 @@ import {
 } from "./diff-format";
 import { buildSearchableFileEntries, matchFilePaths, type SearchableFileEntry } from "./file-search-model";
 import type { FuzzyFileMatch } from "./file-search-modal";
+import type { FileTreeRow } from "./file-tree-sidebar";
 import {
   applySyntaxChunks,
   buildHighlightDocument,
@@ -78,6 +79,7 @@ import {
   DIFF_BORDER_FG,
   DIFF_BOTTOM_BAR_LINES,
   DIFF_TOP_BAR_LINES,
+  FILE_TREE_SIDEBAR_WIDTH,
   INPUT_LINES,
   NAV_CARD_HEIGHT,
   FILE_SEARCH_MAX_MATCHES,
@@ -135,6 +137,10 @@ class GadgetUi {
   private fileViewMode: FileViewMode = "diff";
   private fileModalOpen = false;
   private fileSearchModalOpen = false;
+  private fileTreeOpen = false;
+  private fileTreeScrollOffset = 0;
+  private fileTreeRows: FileTreeRow[] = [];
+  private fileTreeExpandedDirs = new Set<string>();
   private diffBaseModalOpen = false;
   private helpModalOpen = false;
   private sessionModalOpen = false;
@@ -217,6 +223,11 @@ class GadgetUi {
   async start(): Promise<void> {
     this.view = await GadgetRenderer.create({
       navWidth: () => navWidthFor(this.navMode),
+      fileTreeWidth: () => this.fileTreeWidth(),
+      onFileTreeRowMouseDown: (row) => {
+        void this.handleFileTreeRow(row);
+      },
+      onFileTreeScroll: (delta) => this.scrollFileTree(delta),
       onNavFileMouseDown: (row) => {
         const fileIndex = this.fileIndexFromNavRow(row);
         if (fileIndex !== null) {
@@ -477,7 +488,9 @@ class GadgetUi {
         }
         return;
       case "cancel":
-        if (this.reviewMode) {
+        if (this.fileTreeOpen) {
+          this.closeFileTree();
+        } else if (this.reviewMode) {
           this.cancelReview();
         } else if (this.scratchpadMode) {
           this.cancelScratchpad();
@@ -514,6 +527,9 @@ class GadgetUi {
         return;
       case "openFilePicker":
         this.openFileModal();
+        return;
+      case "toggleFileTree":
+        await this.toggleFileTree();
         return;
       case "searchFiles":
         await this.openFileSearchModal();
@@ -802,6 +818,7 @@ class GadgetUi {
 
   private renderAll(): void {
     this.renderDockSpacer();
+    this.renderFileTreeSidebar();
     this.renderNav();
     this.renderDiff();
     this.renderStatus();
@@ -811,6 +828,23 @@ class GadgetUi {
     this.renderHelpModal();
     this.renderSessionModal();
     this.view?.requestRender();
+  }
+
+  private renderFileTreeSidebar(): void {
+    if (!this.view) {
+      return;
+    }
+    if (this.fileTreeOpen) {
+      this.fileTreeRows = this.buildFileTreeRows();
+      this.clampFileTreeScrollOffset();
+    }
+    this.view.renderFileTreeSidebar({
+      open: this.fileTreeOpen,
+      rows: this.fileTreeRows,
+      scrollOffset: this.fileTreeScrollOffset,
+      loading: this.searchableFilesRefreshing && !this.searchableFilesLoaded,
+      currentFilePath: this.selectedFile()?.filePath ?? "no file",
+    });
   }
 
   private renderNav(): void {
@@ -1371,7 +1405,7 @@ class GadgetUi {
     if (!this.view) {
       return 80;
     }
-    return Math.max(1, this.view.width - navWidthFor(this.navMode));
+    return Math.max(1, this.view.width - navWidthFor(this.navMode) - (this.fileTreeOpen ? this.fileTreeWidth() : 0));
   }
 
   private diffContentWidth(): number {
@@ -1379,7 +1413,14 @@ class GadgetUi {
   }
 
   private diffHasLeftBorder(): boolean {
-    return this.navMode === "compact";
+    return this.navMode === "compact" && !this.fileTreeOpen;
+  }
+
+  private fileTreeWidth(): number {
+    if (!this.view) {
+      return FILE_TREE_SIDEBAR_WIDTH;
+    }
+    return clamp(FILE_TREE_SIDEBAR_WIDTH, 18, Math.max(18, this.view.width - 20));
   }
 
   private diffViewportHeight(): number {
@@ -1415,6 +1456,13 @@ class GadgetUi {
 
   private diffBottomBarHeight(): number {
     return this.bottomDockOpen() ? 0 : DIFF_BOTTOM_BAR_LINES;
+  }
+
+  private fileTreeVisibleRows(): number {
+    if (!this.view) {
+      return 1;
+    }
+    return this.view.fileTreeSidebar.visibleRows(this.view.height);
   }
 
   private fileModalVisibleRows(): number {
@@ -1491,6 +1539,11 @@ class GadgetUi {
     return clamp(offset, 0, maxOffset);
   }
 
+  private clampedFileTreeScrollOffset(offset: number): number {
+    const maxOffset = Math.max(0, this.fileTreeRows.length - this.fileTreeVisibleRows());
+    return clamp(offset, 0, maxOffset);
+  }
+
   private clampedFileSearchScrollOffset(offset: number): number {
     const maxOffset = Math.max(0, this.fileSearchMatches.length - this.fileSearchModalVisibleRows());
     return clamp(offset, 0, maxOffset);
@@ -1503,6 +1556,10 @@ class GadgetUi {
 
   private clampFileModalScrollOffset(): void {
     this.fileModalScrollOffset = this.clampedFileModalScrollOffset(this.fileModalScrollOffset);
+  }
+
+  private clampFileTreeScrollOffset(): void {
+    this.fileTreeScrollOffset = this.clampedFileTreeScrollOffset(this.fileTreeScrollOffset);
   }
 
   private clampFileSearchScrollOffset(): void {
@@ -1531,6 +1588,26 @@ class GadgetUi {
       this.fileModalScrollOffset = this.selectedFileIndex - visibleRows + 1;
     }
     this.clampFileModalScrollOffset();
+  }
+
+  private revealSelectedFileInTree(): void {
+    const selectedFilePath = this.selectedFile()?.filePath;
+    if (!selectedFilePath) {
+      return;
+    }
+    this.expandFileTreePath(selectedFilePath);
+    this.fileTreeRows = this.buildFileTreeRows();
+    const rowIndex = this.fileTreeRows.findIndex((row) => row.type === "file" && row.path === selectedFilePath);
+    if (rowIndex < 0) {
+      return;
+    }
+    const visibleRows = this.fileTreeVisibleRows();
+    if (rowIndex < this.fileTreeScrollOffset) {
+      this.fileTreeScrollOffset = rowIndex;
+    } else if (rowIndex >= this.fileTreeScrollOffset + visibleRows) {
+      this.fileTreeScrollOffset = rowIndex - visibleRows + 1;
+    }
+    this.clampFileTreeScrollOffset();
   }
 
   private revealSelectedFileSearchMatch(): void {
@@ -1577,6 +1654,9 @@ class GadgetUi {
     this.revealSelectedLine = true;
     this.pinSelectedLineToTop = true;
     this.centerSelectedLineInViewport = false;
+    if (this.fileTreeOpen) {
+      this.revealSelectedFileInTree();
+    }
     if (this.fileViewMode === "file") {
       void this.refreshSelectedCurrentFileView().then(() => {
         this.selectedLineIndex = clamp(this.selectedLineIndex, 0, Math.max(0, this.selectedLines().length - 1));
@@ -1606,6 +1686,16 @@ class GadgetUi {
     this.renderAll();
   }
 
+  private scrollFileTree(delta: number): void {
+    const nextOffset = this.fileTreeScrollOffset + delta;
+    const clampedOffset = this.clampedFileTreeScrollOffset(nextOffset);
+    if (clampedOffset === this.fileTreeScrollOffset) {
+      return;
+    }
+    this.fileTreeScrollOffset = clampedOffset;
+    this.renderAll();
+  }
+
   private scrollFileSearch(delta: number): void {
     const nextOffset = this.fileSearchScrollOffset + delta;
     const clampedOffset = this.clampedFileSearchScrollOffset(nextOffset);
@@ -1624,6 +1714,79 @@ class GadgetUi {
     }
     this.diffBaseModalScrollOffset = clampedOffset;
     this.renderAll();
+  }
+
+  private async handleFileTreeRow(row: FileTreeRow): Promise<void> {
+    if (row.type === "folder") {
+      this.fileTreeExpandedDirs = new Set([...this.folderPathAncestors(row.path), row.path]);
+      this.fileTreeRows = this.buildFileTreeRows();
+      this.clampFileTreeScrollOffset();
+      this.renderAll();
+      return;
+    }
+    await this.openFilePath(row.path, `opened ${row.path}`);
+  }
+
+  private buildFileTreeRows(): FileTreeRow[] {
+    const selectedFilePath = this.selectedFile()?.filePath ?? "";
+    const paths = this.fileTreePaths();
+    const root = new Map<string, unknown>();
+    for (const filePath of paths) {
+      let node = root;
+      for (const part of filePath.split("/").filter(Boolean)) {
+        if (!node.has(part)) {
+          node.set(part, new Map<string, unknown>());
+        }
+        node = node.get(part) as Map<string, unknown>;
+      }
+    }
+
+    const rows: FileTreeRow[] = [];
+    const visit = (node: Map<string, unknown>, prefix: string, depth: number) => {
+      const entries = [...node.entries()].sort(([aName, aValue], [bName, bValue]) => {
+        const aFolder = aValue instanceof Map && (aValue as Map<string, unknown>).size > 0;
+        const bFolder = bValue instanceof Map && (bValue as Map<string, unknown>).size > 0;
+        if (aFolder !== bFolder) {
+          return aFolder ? -1 : 1;
+        }
+        return aName.localeCompare(bName);
+      });
+      for (const [name, value] of entries) {
+        const path = prefix ? `${prefix}/${name}` : name;
+        const child = value as Map<string, unknown>;
+        const isFolder = child.size > 0 && paths.some((filePath) => filePath.startsWith(`${path}/`));
+        if (!isFolder) {
+          rows.push({ type: "file", path, name, depth, selected: path === selectedFilePath });
+          continue;
+        }
+        const expanded = this.fileTreeExpandedDirs.has(path);
+        rows.push({ type: "folder", path, name, depth, expanded });
+        if (expanded) {
+          visit(child, path, depth + 1);
+        }
+      }
+    };
+    visit(root, "", 0);
+    return rows;
+  }
+
+  private fileTreePaths(): string[] {
+    const paths = new Set([...this.searchableFiles, ...this.state.files.map((file) => file.filePath)]);
+    return [...paths].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }
+
+  private expandFileTreePath(filePath: string): void {
+    this.fileTreeExpandedDirs = new Set(this.folderPathAncestors(filePath));
+  }
+
+  private folderPathAncestors(path: string): string[] {
+    const parts = path.split("/").filter(Boolean);
+    const ancestors: string[] = [];
+    const limit = path.endsWith("/") ? parts.length : Math.max(0, parts.length - 1);
+    for (let index = 0; index < limit; index += 1) {
+      ancestors.push(parts.slice(0, index + 1).join("/"));
+    }
+    return ancestors;
   }
 
   private selectFileFromModal(index: number): void {
@@ -2083,6 +2246,49 @@ class GadgetUi {
     this.renderAll();
   }
 
+  private async toggleFileTree(): Promise<void> {
+    if (this.fileTreeOpen) {
+      this.closeFileTree();
+      return;
+    }
+    await this.openFileTree();
+  }
+
+  private async openFileTree(): Promise<void> {
+    if (this.scratchpadMode) {
+      this.setStatus("scratchpad mode");
+      return;
+    }
+    this.saveActiveAnnotationComment();
+    this.closeOverlays();
+    this.fileTreeOpen = true;
+    this.revealSelectedLine = true;
+    this.pinSelectedLineToTop = false;
+    this.centerSelectedLineInViewport = false;
+    this.revealSelectedFileInTree();
+    if (!this.searchableFilesLoaded) {
+      this.setStatus("loading file tree");
+      this.renderAll();
+      void this.refreshSearchableFileCache({ render: true, updateStatus: false }).then(() => {
+        if (!this.fileTreeOpen) {
+          return;
+        }
+        this.revealSelectedFileInTree();
+        this.renderAll();
+      });
+      return;
+    }
+    this.renderAll();
+  }
+
+  private closeFileTree(): void {
+    if (!this.fileTreeOpen) {
+      return;
+    }
+    this.fileTreeOpen = false;
+    this.renderAll();
+  }
+
   private closeFileModal(): void {
     if (!this.fileModalOpen) {
       return;
@@ -2180,6 +2386,7 @@ class GadgetUi {
   }
 
   private closeOverlays(): void {
+    this.fileTreeOpen = false;
     this.fileModalOpen = false;
     this.fileSearchModalOpen = false;
     this.diffBaseModalOpen = false;
@@ -2258,7 +2465,10 @@ class GadgetUi {
     if (!match) {
       return;
     }
-    const filePath = match.filePath;
+    await this.openFilePath(match.filePath, `opened ${match.filePath}`);
+  }
+
+  private async openFilePath(filePath: string, status: string): Promise<void> {
     this.openedFilePaths.add(filePath);
     this.ensureOpenedFilesInState();
     const fileIndex = this.state.files.findIndex((file) => file.filePath === filePath);
@@ -2278,8 +2488,9 @@ class GadgetUi {
     this.centerSelectedLineInViewport = false;
     this.revealSelectedFileInNav();
     this.revealSelectedFileInModal();
+    this.revealSelectedFileInTree();
     await this.refreshCurrentFileView(this.state.files[fileIndex]!);
-    this.setStatus(`opened ${filePath}`);
+    this.setStatus(status);
     this.renderAll();
   }
 

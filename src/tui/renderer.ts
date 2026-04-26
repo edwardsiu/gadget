@@ -13,6 +13,7 @@ import type { AgentSessionInfo, DiffFile } from "../types";
 import { DiffBaseModal } from "./diff-base-modal";
 import { type FuzzyFileMatch, FileSearchModal } from "./file-search-modal";
 import { FileSelectorModal } from "./file-selector-modal";
+import { FileTreeSidebar, type FileTreeRow } from "./file-tree-sidebar";
 import { HelpModal } from "./help-modal";
 import { formatDiffBottomBar, formatDiffTopBar, formatFileCardNav, formatNavBox, navWidthFor, type NavMode } from "./nav-format";
 import { SessionModal } from "./session-modal";
@@ -20,6 +21,9 @@ import { COLORS, DIFF_BOTTOM_BAR_LINES, DIFF_TOP_BAR_LINES, NAV_HINT_OPEN } from
 
 export type GadgetRendererCallbacks = {
   navWidth: () => number;
+  fileTreeWidth: () => number;
+  onFileTreeRowMouseDown: (row: FileTreeRow) => void;
+  onFileTreeScroll: (delta: number) => void;
   onNavFileMouseDown: (row: number) => void;
   onNavScroll: (direction: "up" | "down" | "left" | "right" | undefined, shift: boolean) => void;
   onDiffBottomBarMouseDown: () => void;
@@ -34,6 +38,7 @@ export type GadgetRendererCallbacks = {
 
 export class GadgetRenderer {
   readonly renderer: CliRenderer;
+  readonly fileTreeSidebar: FileTreeSidebar;
   readonly navText: TextRenderable;
   readonly diffScroll: ScrollBoxRenderable;
   readonly diffTopBarText: TextRenderable;
@@ -60,7 +65,10 @@ export class GadgetRenderer {
     return new GadgetRenderer(renderer, callbacks);
   }
 
-  private constructor(renderer: CliRenderer, callbacks: GadgetRendererCallbacks) {
+  private constructor(
+    renderer: CliRenderer,
+    private readonly callbacks: GadgetRendererCallbacks,
+  ) {
     this.renderer = renderer;
 
     const root = new BoxRenderable(renderer, {
@@ -69,6 +77,11 @@ export class GadgetRenderer {
       height: "100%",
       flexDirection: "row",
       backgroundColor: COLORS.bg,
+    });
+
+    this.fileTreeSidebar = new FileTreeSidebar(renderer, {
+      onSelectRow: callbacks.onFileTreeRowMouseDown,
+      onScroll: callbacks.onFileTreeScroll,
     });
 
     this.navText = new TextRenderable(renderer, {
@@ -168,6 +181,7 @@ export class GadgetRenderer {
     this.helpModal = new HelpModal(renderer);
     this.sessionModal = new SessionModal(renderer);
 
+    root.add(this.fileTreeSidebar.renderable);
     root.add(this.navText);
     root.add(diffColumn);
     root.add(this.fileSelectorModal.renderable);
@@ -240,6 +254,20 @@ export class GadgetRenderer {
         return { file, selected: fileIndex === options.selectedFileIndex };
       });
     this.navText.content = formatFileCardNav(rows, navWidthFor(options.navMode), options.navHeight, NAV_HINT_OPEN);
+  }
+
+  renderFileTreeSidebar(options: {
+    open: boolean;
+    rows: FileTreeRow[];
+    scrollOffset: number;
+    loading: boolean;
+    currentFilePath: string;
+  }): void {
+    this.fileTreeSidebar.render({
+      ...options,
+      width: options.open ? this.callbacks.fileTreeWidth() : 0,
+      height: this.height,
+    });
   }
 
   renderStatus(options: {

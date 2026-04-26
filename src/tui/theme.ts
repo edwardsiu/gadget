@@ -28,6 +28,7 @@ export const DIFF_TOP_BAR_LINES = 1;
 export const DIFF_BOTTOM_BAR_LINES = 1;
 export const INPUT_LINES = 0;
 export const NAV_CARD_HEIGHT = 2;
+export const FILE_TREE_SIDEBAR_WIDTH = 36;
 export const DIFF_LINE_NUMBER_WIDTH = 4;
 export const NAV_HINT_OPEN = "Close [F]";
 export const DIFF_BORDER_FG = "#ffffff";
@@ -45,6 +46,7 @@ export const HELP_MODAL_ROWS = [
   "H            Previous file",
   "L            Next file",
   "P            Open file selector",
+  "F            Toggle file tree",
   "Shift+P      Search project files",
   "B            Choose diff base",
   "O            Toggle full file",

@@ -12,6 +12,7 @@ export type MainInputAction =
   | { type: "nextFile" }
   | { type: "submitOrComment" }
   | { type: "openFilePicker" }
+  | { type: "toggleFileTree" }
   | { type: "searchFiles" }
   | { type: "chooseDiffBase" }
   | { type: "openHelp" }
@@ -86,6 +87,9 @@ export function mainActionFromRaw(sequence: string): MainInputAction | null {
       return { type: "submitOrComment" };
     case "p":
       return { type: "openFilePicker" };
+    case "f":
+    case "F":
+      return { type: "toggleFileTree" };
     case "P":
       return { type: "searchFiles" };
     case "b":
@@ -112,6 +116,9 @@ export function mainActionFromKey(key: KeyEvent): MainInputAction | null {
   }
   if ((key.shift && key.name === "p") || key.sequence === "P") {
     return { type: "searchFiles" };
+  }
+  if (key.name === "f" || key.sequence === "f" || (key.shift && key.name === "f") || key.sequence === "F") {
+    return { type: "toggleFileTree" };
   }
   if ((key.shift && key.name === "r") || key.sequence === "R") {
     return { type: "replyAgentTurn" };
