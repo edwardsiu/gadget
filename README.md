@@ -12,8 +12,12 @@ From this repo, install dependencies and link the `gadget` command:
 
 ```bash
 bun install
+sh setup.sh
 sh install.sh
 ```
+
+The setup script links the shared agent instructions for Claude compatibility:
+`.claude/skills -> ../.agents/skills` and `CLAUDE.md -> AGENTS.md`.
 
 The installer writes a local wrapper at `bin/gadget` and symlinks it to `~/.local/bin/gadget`. It refuses to overwrite an existing `gadget` command that points somewhere else. Make sure `~/.local/bin` is on your `PATH`:
 

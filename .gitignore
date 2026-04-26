@@ -5,3 +5,5 @@ dist
 *.log
 src/codex/protocol/
 bin/gadget
+.claude/skills
+CLAUDE.md
