@@ -65,38 +65,6 @@ S            Session info
 Shift+Q      Quit
 ```
 
-## Installer Options
-
-The installer uses Bun and installs it automatically if it is not already available. The Codex CLI is optional for connected Codex sessions. The Claude CLI and cmux are optional for connected Claude sessions.
-
-The installer writes a local wrapper at `bin/gadget` and symlinks it to `~/.local/bin/gadget`. It refuses to overwrite an existing `gadget` command that points somewhere else. Make sure `~/.local/bin` is on your `PATH`:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-To install somewhere else:
-
-```bash
-GADGET_INSTALL_DIR=/usr/local/bin bash install.sh
-```
-
-If cmux is installed, the installer prompts whether to enable Claude integration. The setting is stored in `~/.gadget/config.toml`:
-
-```toml
-[diff]
-view = "file" # or "continuous"
-
-[integrations]
-cmux = true
-```
-
-You can also set it non-interactively:
-
-```bash
-GADGET_CMUX=1 GADGET_DIFF_VIEW=continuous bash install.sh
-```
-
 ## Development Setup
 
 For local agent development, run:
