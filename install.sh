@@ -9,9 +9,14 @@ CONFIG_FILE="$CONFIG_DIR/config.toml"
 BUN_BIN=${BUN:-}
 GADGET_CMUX=${GADGET_CMUX:-}
 GADGET_CMUX_EXPLICIT=0
+GADGET_DIFF_VIEW=${GADGET_DIFF_VIEW:-}
+GADGET_DIFF_VIEW_EXPLICIT=0
 
 if [ -n "$GADGET_CMUX" ]; then
   GADGET_CMUX_EXPLICIT=1
+fi
+if [ -n "$GADGET_DIFF_VIEW" ]; then
+  GADGET_DIFF_VIEW_EXPLICIT=1
 fi
 
 if [ -z "$BUN_BIN" ]; then
@@ -32,6 +37,9 @@ if [ -z "$GADGET_CMUX" ] && [ -f "$CONFIG_FILE" ]; then
     false) GADGET_CMUX=0 ;;
   esac
 fi
+if [ -z "$GADGET_DIFF_VIEW" ] && [ -f "$CONFIG_FILE" ]; then
+  GADGET_DIFF_VIEW=$(sed -n 's/^[[:space:]]*view[[:space:]]*=[[:space:]]*"\(file\|continuous\)"[[:space:]]*$/\1/p' "$CONFIG_FILE" | tail -n 1)
+fi
 
 if [ -z "$GADGET_CMUX" ]; then
   GADGET_CMUX=0
@@ -48,28 +56,57 @@ case "$GADGET_CMUX" in
   1|true|TRUE|yes|YES|y|Y) GADGET_CMUX=1 ;;
   *) GADGET_CMUX=0 ;;
 esac
+case "$GADGET_DIFF_VIEW" in
+  ""|file) GADGET_DIFF_VIEW=file ;;
+  continuous) GADGET_DIFF_VIEW=continuous ;;
+  *)
+    echo "Invalid GADGET_DIFF_VIEW: $GADGET_DIFF_VIEW. Expected 'file' or 'continuous'." >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$CONFIG_DIR"
 if [ ! -f "$CONFIG_FILE" ]; then
   cat > "$CONFIG_FILE" <<EOF
+[diff]
+view = "$GADGET_DIFF_VIEW"
+
 [integrations]
 cmux = $([ "$GADGET_CMUX" = "1" ] && echo true || echo false)
 EOF
-elif [ "$GADGET_CMUX_EXPLICIT" = "1" ]; then
+elif [ "$GADGET_CMUX_EXPLICIT" = "1" ] || [ "$GADGET_DIFF_VIEW_EXPLICIT" = "1" ]; then
   CONFIG_TMP="$CONFIG_FILE.tmp.$$"
-  awk -v value="$([ "$GADGET_CMUX" = "1" ] && echo true || echo false)" '
-    BEGIN { updated = 0 }
+  awk \
+    -v cmux_value="$([ "$GADGET_CMUX" = "1" ] && echo true || echo false)" \
+    -v cmux_explicit="$GADGET_CMUX_EXPLICIT" \
+    -v diff_view="$GADGET_DIFF_VIEW" \
+    -v diff_view_explicit="$GADGET_DIFF_VIEW_EXPLICIT" '
+    BEGIN { cmux_updated = 0; diff_view_updated = 0 }
+    /^[[:space:]]*view[[:space:]]*=/ {
+      if (diff_view_explicit == "1") {
+        print "view = \"" diff_view "\""
+        diff_view_updated = 1
+        next
+      }
+    }
     /^[[:space:]]*cmux[[:space:]]*=/ {
-      print "cmux = " value
-      updated = 1
-      next
+      if (cmux_explicit == "1") {
+        print "cmux = " cmux_value
+        cmux_updated = 1
+        next
+      }
     }
     { print }
     END {
-      if (!updated) {
+      if (diff_view_explicit == "1" && !diff_view_updated) {
+        print ""
+        print "[diff]"
+        print "view = \"" diff_view "\""
+      }
+      if (cmux_explicit == "1" && !cmux_updated) {
         print ""
         print "[integrations]"
-        print "cmux = " value
+        print "cmux = " cmux_value
       }
     }
   ' "$CONFIG_FILE" > "$CONFIG_TMP"
@@ -99,6 +136,7 @@ if [ "$GADGET_CMUX" = "1" ]; then
 else
   echo "cmux integration is disabled. Reinstall with GADGET_CMUX=1 to enable it."
 fi
+echo "Diff view is '$GADGET_DIFF_VIEW'. Reinstall with GADGET_DIFF_VIEW=continuous to enable continuous diffs."
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)

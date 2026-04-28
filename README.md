@@ -53,7 +53,7 @@ cmux = true
 You can also set it non-interactively:
 
 ```bash
-GADGET_CMUX=1 sh install.sh
+GADGET_CMUX=1 GADGET_DIFF_VIEW=continuous sh install.sh
 ```
 
 Verify the install:
