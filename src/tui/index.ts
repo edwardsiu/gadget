@@ -91,6 +91,9 @@ import {
 type InputMode = "none" | "comment" | "file-search" | "scratchpad-content";
 type FileViewMode = "diff" | "file";
 type DiffBaseOverrideSource = "github" | "manual";
+type FileTreeNode = {
+  children: Map<string, FileTreeNode>;
+};
 type ReviewCommentDraft = {
   key: string;
   file: DiffFile;
@@ -113,6 +116,10 @@ export type InitialFileTarget = {
   filePath: string;
   lineNumber?: number;
 };
+
+function createFileTreeNode(): FileTreeNode {
+  return { children: new Map() };
+}
 
 registerAdditionalSyntaxParsers();
 
@@ -142,6 +149,11 @@ class GadgetUi {
   private fileTreeScrollOffset = 0;
   private fileTreeRows: FileTreeRow[] = [];
   private fileTreeExpandedDirs = new Set<string>();
+  private fileTreeRoot: FileTreeNode = createFileTreeNode();
+  private fileTreeStructureDirty = true;
+  private fileTreeRowsDirty = true;
+  private fileTreeRowsExpandedKey = "";
+  private fileTreeRowsSelectedPath = "";
   private diffBaseModalOpen = false;
   private helpModalOpen = false;
   private sessionModalOpen = false;
@@ -803,6 +815,7 @@ class GadgetUi {
     }
     const selectedFilePath = this.selectedFile()?.filePath ?? fallbackSelectedFilePath;
     this.state = nextState;
+    this.invalidateFileTreeStructure();
     this.diffLoaded = true;
     this.diffStateSignature = nextSignature;
     this.ensureOpenedFilesInState();
@@ -860,7 +873,7 @@ class GadgetUi {
       return;
     }
     if (this.fileTreeOpen) {
-      this.fileTreeRows = this.buildFileTreeRows();
+      this.fileTreeRows = this.currentFileTreeRows();
       this.clampFileTreeScrollOffset();
     }
     this.view.renderFileTreeSidebar({
@@ -1653,7 +1666,7 @@ class GadgetUi {
       return;
     }
     this.expandFileTreePath(selectedFilePath);
-    this.fileTreeRows = this.buildFileTreeRows();
+    this.fileTreeRows = this.currentFileTreeRows();
     const rowIndex = this.fileTreeRows.findIndex((row) => row.type === "file" && row.path === selectedFilePath);
     if (rowIndex < 0) {
       return;
@@ -1785,7 +1798,8 @@ class GadgetUi {
           row.path,
         ]);
       }
-      this.fileTreeRows = this.buildFileTreeRows();
+      this.invalidateFileTreeRows();
+      this.fileTreeRows = this.currentFileTreeRows();
       this.clampFileTreeScrollOffset();
       this.renderAll();
       return;
@@ -1793,25 +1807,21 @@ class GadgetUi {
     await this.openFilePath(row.path, `opened ${row.path}`);
   }
 
-  private buildFileTreeRows(): FileTreeRow[] {
+  private currentFileTreeRows(): FileTreeRow[] {
     const selectedFilePath = this.selectedFile()?.filePath ?? "";
-    const paths = this.fileTreePaths();
-    const root = new Map<string, unknown>();
-    for (const filePath of paths) {
-      let node = root;
-      for (const part of filePath.split("/").filter(Boolean)) {
-        if (!node.has(part)) {
-          node.set(part, new Map<string, unknown>());
-        }
-        node = node.get(part) as Map<string, unknown>;
-      }
+    const expandedKey = this.fileTreeExpandedKey();
+    if (this.fileTreeStructureDirty) {
+      this.rebuildFileTreeStructure();
+    }
+    if (!this.fileTreeRowsDirty && this.fileTreeRowsSelectedPath === selectedFilePath && this.fileTreeRowsExpandedKey === expandedKey) {
+      return this.fileTreeRows;
     }
 
     const rows: FileTreeRow[] = [];
-    const visit = (node: Map<string, unknown>, prefix: string, depth: number) => {
-      const entries = [...node.entries()].sort(([aName, aValue], [bName, bValue]) => {
-        const aFolder = aValue instanceof Map && (aValue as Map<string, unknown>).size > 0;
-        const bFolder = bValue instanceof Map && (bValue as Map<string, unknown>).size > 0;
+    const visit = (node: FileTreeNode, prefix: string, depth: number) => {
+      const entries = [...node.children.entries()].sort(([aName, aValue], [bName, bValue]) => {
+        const aFolder = aValue.children.size > 0;
+        const bFolder = bValue.children.size > 0;
         if (aFolder !== bFolder) {
           return aFolder ? -1 : 1;
         }
@@ -1819,8 +1829,7 @@ class GadgetUi {
       });
       for (const [name, value] of entries) {
         const path = prefix ? `${prefix}/${name}` : name;
-        const child = value as Map<string, unknown>;
-        const isFolder = child.size > 0 && paths.some((filePath) => filePath.startsWith(`${path}/`));
+        const isFolder = value.children.size > 0;
         if (!isFolder) {
           rows.push({ type: "file", path, name, depth, selected: path === selectedFilePath });
           continue;
@@ -1828,12 +1837,48 @@ class GadgetUi {
         const expanded = this.fileTreeExpandedDirs.has(path);
         rows.push({ type: "folder", path, name, depth, expanded });
         if (expanded) {
-          visit(child, path, depth + 1);
+          visit(value, path, depth + 1);
         }
       }
     };
-    visit(root, "", 0);
+    visit(this.fileTreeRoot, "", 0);
+    this.fileTreeRows = rows;
+    this.fileTreeRowsDirty = false;
+    this.fileTreeRowsExpandedKey = expandedKey;
+    this.fileTreeRowsSelectedPath = selectedFilePath;
     return rows;
+  }
+
+  private rebuildFileTreeStructure(): void {
+    const root = createFileTreeNode();
+    for (const filePath of this.fileTreePaths()) {
+      let node = root;
+      const parts = filePath.split("/").filter(Boolean);
+      for (const part of parts) {
+        let child = node.children.get(part);
+        if (!child) {
+          child = createFileTreeNode();
+          node.children.set(part, child);
+        }
+        node = child;
+      }
+    }
+    this.fileTreeRoot = root;
+    this.fileTreeStructureDirty = false;
+    this.invalidateFileTreeRows();
+  }
+
+  private invalidateFileTreeStructure(): void {
+    this.fileTreeStructureDirty = true;
+    this.invalidateFileTreeRows();
+  }
+
+  private invalidateFileTreeRows(): void {
+    this.fileTreeRowsDirty = true;
+  }
+
+  private fileTreeExpandedKey(): string {
+    return [...this.fileTreeExpandedDirs].sort((a, b) => a.localeCompare(b)).join("\0");
   }
 
   private fileTreePaths(): string[] {
@@ -1843,6 +1888,7 @@ class GadgetUi {
 
   private expandFileTreePath(filePath: string): void {
     this.fileTreeExpandedDirs = new Set(this.folderPathAncestors(filePath));
+    this.invalidateFileTreeRows();
   }
 
   private folderPathAncestors(path: string): string[] {
@@ -2613,6 +2659,7 @@ class GadgetUi {
       }
       this.searchableFiles = files;
       this.searchableFileEntries = buildSearchableFileEntries(files);
+      this.invalidateFileTreeStructure();
       this.searchableFilesLoaded = true;
       if (this.fileSearchModalOpen) {
         this.updateFileSearchMatches();
@@ -2707,10 +2754,15 @@ class GadgetUi {
   }
 
   private ensureOpenedFilesInState(): void {
+    let changed = false;
     for (const filePath of this.openedFilePaths) {
       if (!this.state.files.some((file) => file.filePath === filePath)) {
         this.state.files.push(createOpenedFile(filePath));
+        changed = true;
       }
+    }
+    if (changed) {
+      this.invalidateFileTreeStructure();
     }
   }
 
