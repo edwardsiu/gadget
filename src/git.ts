@@ -1,8 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { constants, existsSync, readFileSync, statSync, watch as watchFileSystem, type FSWatcher } from "node:fs";
-import { access, mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync, watch as watchFileSystem, type FSWatcher } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { DiffFile, DiffLineRef, DiffState } from "./types";
 
 const DIFF_CONTEXT_LINES = 3;
@@ -14,7 +11,7 @@ export type DiffWatcher = {
 export type ReadDiffStateOptions = {
   baseRef?: string;
   includeUntracked?: boolean;
-  worktree?: WorktreeInfo;
+  gitInfo?: GitInfo;
 };
 
 export type DiffBaseCandidateSource = "github" | "config" | "upstream" | "default";
@@ -31,19 +28,9 @@ export type DiffBaseCandidateOptions = {
   includePullRequestBase?: boolean;
 };
 
-export type WorktreeInfo = {
+export type GitInfo = {
   cwd: string;
-  repositoryRoot: string;
-  worktreePath: string;
-  worktreeName: string;
   branchName: string;
-  isPrimary: boolean;
-};
-
-export type ListedWorktree = {
-  path: string;
-  branchName: string | null;
-  head: string | null;
 };
 
 export async function runGit(cwd: string, args: string[]): Promise<string> {
@@ -107,9 +94,9 @@ export async function assertGitRepo(cwd: string): Promise<void> {
 }
 
 export async function readDiffState(cwd: string, options: ReadDiffStateOptions = {}): Promise<DiffState> {
-  const [baseCandidate, worktree] = await Promise.all([
+  const [baseCandidate, gitInfo] = await Promise.all([
     resolveDiffBase(cwd, options.baseRef),
-    options.worktree ? Promise.resolve(options.worktree) : readWorktreeInfo(cwd),
+    options.gitInfo ? Promise.resolve(options.gitInfo) : readGitInfo(cwd),
   ]);
   const diff = await runReadOnlyGit(cwd, ["diff", baseCandidate.mergeBase, "--no-color", "--no-ext-diff", `--unified=${DIFF_CONTEXT_LINES}`, "--"]);
   const files = parseUnifiedDiff(diff);
@@ -117,13 +104,10 @@ export async function readDiffState(cwd: string, options: ReadDiffStateOptions =
     files.push(...(await readUntrackedDiffs(cwd)));
   }
   return {
-    cwd: worktree.cwd,
+    cwd: gitInfo.cwd,
     baseRef: baseCandidate.mergeBase,
     baseRefLabel: baseCandidate.label,
-    branchName: worktree.branchName,
-    repositoryRoot: worktree.repositoryRoot,
-    worktreeName: worktree.worktreeName,
-    worktreePath: worktree.worktreePath,
+    branchName: gitInfo.branchName,
     files,
     refreshedAt: Date.now(),
   };
@@ -144,99 +128,14 @@ export async function readCurrentBranch(cwd: string): Promise<string> {
   return shortSha ? `detached:${shortSha}` : "HEAD";
 }
 
-export async function readWorktreeInfo(cwd: string): Promise<WorktreeInfo> {
-  const worktreePath = (await runReadOnlyGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
-  const worktrees = await listWorktrees(worktreePath);
-  const current = worktrees.find((worktree) => worktree.path === worktreePath);
-  const branchName = current?.branchName ?? await readCurrentBranch(worktreePath);
-  const repositoryRoot = worktrees[0]?.path ?? worktreePath;
+export async function readGitInfo(cwd: string): Promise<GitInfo> {
+  const root = (await runReadOnlyGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  const branchName = await readCurrentBranch(root);
 
   return {
-    cwd: worktreePath,
-    repositoryRoot,
-    worktreePath,
-    worktreeName: basename(worktreePath),
+    cwd: root,
     branchName: branchName || "HEAD",
-    isPrimary: repositoryRoot === worktreePath,
   };
-}
-
-export async function createGadgetWorktree(cwd: string, requestedName?: string): Promise<WorktreeInfo> {
-  const source = await readWorktreeInfo(cwd);
-  const { branchName, worktreePath } = requestedName
-    ? await nextAvailableWorktreeTarget(source.cwd, source.repositoryRoot, sanitizeWorktreeName(requestedName))
-    : await nextAvailableGeneratedWorktreeTarget(source.cwd, source.repositoryRoot);
-
-  await runGit(source.cwd, ["worktree", "add", "-b", branchName, worktreePath, "HEAD"]);
-  return await readWorktreeInfo(worktreePath);
-}
-
-export async function resolveWorktreeTarget(cwd: string, worktreeName?: string): Promise<WorktreeInfo> {
-  if (!worktreeName) {
-    return await readWorktreeInfo(cwd);
-  }
-
-  const pathCandidate = resolve(cwd, worktreeName);
-  if (await pathExists(pathCandidate)) {
-    return await readWorktreeInfo(pathCandidate);
-  }
-
-  const worktrees = await listWorktrees(cwd);
-  const match = worktrees.find((worktree) => {
-    return (
-      basename(worktree.path) === worktreeName ||
-      worktree.branchName === worktreeName ||
-      worktree.branchName === `gadget/${worktreeName}` ||
-      worktree.path === worktreeName
-    );
-  });
-
-  if (!match) {
-    throw new Error(`No git worktree named ${worktreeName}`);
-  }
-  return await readWorktreeInfo(match.path);
-}
-
-export async function listWorktrees(cwd: string): Promise<ListedWorktree[]> {
-  const output = await runReadOnlyGit(cwd, ["worktree", "list", "--porcelain"]);
-  const worktrees: ListedWorktree[] = [];
-  let current: ListedWorktree | null = null;
-
-  const finish = () => {
-    if (!current) {
-      return;
-    }
-    worktrees.push(current);
-    current = null;
-  };
-
-  for (const line of output.split(/\r?\n/)) {
-    if (line === "") {
-      finish();
-      continue;
-    }
-
-    const [key, ...rest] = line.split(" ");
-    const value = rest.join(" ");
-    if (key === "worktree") {
-      finish();
-      current = { path: value, branchName: null, head: null };
-      continue;
-    }
-
-    if (!current) {
-      continue;
-    }
-    if (key === "HEAD") {
-      current.head = value;
-    }
-    if (key === "branch") {
-      current.branchName = value.replace(/^refs\/heads\//, "");
-    }
-  }
-
-  finish();
-  return worktrees;
 }
 
 export async function findBranchDiffBase(cwd: string): Promise<string> {
@@ -431,85 +330,6 @@ function uniqueRefs(refs: Array<string | null | undefined>): string[] {
     seen.add(ref);
     return true;
   });
-}
-
-async function nextAvailableWorktreeTarget(cwd: string, repositoryRoot: string, baseName: string): Promise<{ branchName: string; worktreePath: string }> {
-  const worktreeRoot = join(homedir(), ".gadget", "worktrees", basename(repositoryRoot));
-  await mkdir(worktreeRoot, { recursive: true });
-
-  for (let index = 0; index < 100; index += 1) {
-    const name = index === 0 ? baseName : `${baseName}-${index + 1}`;
-    const branchName = `gadget/${name}`;
-    const worktreePath = join(worktreeRoot, name);
-    if (await pathExists(worktreePath)) {
-      continue;
-    }
-    if (await branchExists(cwd, branchName)) {
-      continue;
-    }
-    return { branchName, worktreePath };
-  }
-
-  throw new Error(`Could not find an available worktree path for ${baseName}`);
-}
-
-async function nextAvailableGeneratedWorktreeTarget(cwd: string, repositoryRoot: string): Promise<{ branchName: string; worktreePath: string }> {
-  const worktreeRoot = join(homedir(), ".gadget", "worktrees", basename(repositoryRoot));
-  await mkdir(worktreeRoot, { recursive: true });
-
-  for (let index = 0; index < 100; index += 1) {
-    const name = randomGadgetWorktreeName();
-    const branchName = `gadget/${name}`;
-    const worktreePath = join(worktreeRoot, name);
-    if (await pathExists(worktreePath)) {
-      continue;
-    }
-    if (await branchExists(cwd, branchName)) {
-      continue;
-    }
-    return { branchName, worktreePath };
-  }
-
-  throw new Error("Could not find an available generated worktree name");
-}
-
-async function branchExists(cwd: string, branchName: string): Promise<boolean> {
-  return (await tryReadOnlyGit(cwd, ["rev-parse", "--verify", `refs/heads/${branchName}`])) !== null;
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sanitizeWorktreeName(value: string): string {
-  const sanitized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (!sanitized) {
-    return `gadget-${timestampSlug()}`;
-  }
-  return sanitized;
-}
-
-function timestampSlug(): string {
-  return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "z").toLowerCase();
-}
-
-function randomGadgetWorktreeName(): string {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-  const bytes = randomBytes(6);
-  let suffix = "";
-  for (const byte of bytes) {
-    suffix += alphabet[byte % alphabet.length];
-  }
-  return `ggt-${suffix}`;
 }
 
 export function createDiffWatcher(cwd: string, onChange: () => void): DiffWatcher {

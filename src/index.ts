@@ -3,20 +3,16 @@ import { resolve } from "node:path";
 import { Command, InvalidArgumentError } from "@commander-js/extra-typings";
 import { ClipboardAdapter } from "./adapters/clipboard-adapter";
 import { cleanupGadgetResources, type GadgetCleanupResult } from "./adapters/codex-app-server-adapter";
-import { assertGitRepo, createGadgetWorktree, resolveWorktreeTarget, type WorktreeInfo } from "./git";
+import { assertGitRepo, readGitInfo, type GitInfo } from "./git";
 import { createCodexRuntimeAdapter, listCodexRuntimeSessions, startCodexRuntime } from "./runtimes/codex";
 import type { RuntimeSession } from "./runtimes/types";
 import { runGadgetUi, type InitialFileTarget } from "./tui";
 
-type CommandTarget = {
-  worktree: WorktreeInfo;
-  selectedWorktreeName: string | undefined;
-};
 type DiffMode = "auto" | "clipboard";
 type DiffRunTarget =
-  | { kind: "clipboard"; cwd: string; worktree: WorktreeInfo }
-  | { kind: "session"; cwd: string; session: RuntimeSession; worktree?: WorktreeInfo }
-  | { kind: "session-choice"; cwd: string; sessions: RuntimeSession[]; worktree: WorktreeInfo };
+  | { kind: "clipboard"; cwd: string; gitInfo: GitInfo }
+  | { kind: "session"; cwd: string; session: RuntimeSession; gitInfo?: GitInfo }
+  | { kind: "session-choice"; cwd: string; sessions: RuntimeSession[]; gitInfo: GitInfo };
 
 const program = new Command();
 
@@ -27,30 +23,11 @@ program
   .showHelpAfterError()
   .allowExcessArguments(false)
   .argument("[file]", "open a file in full-file view, optionally with :line")
-  .option("--worktree <name-or-path>", "open the diff viewer for a specific git worktree")
-  .action(async (file, options) => {
+  .action(async (file) => {
     const initialFile = parseInitialFileTarget(file);
     await openDiffViewer({
       mode: "auto",
-      worktree: options.worktree,
       ...(initialFile ? { initialFile } : {}),
-    });
-  });
-
-program
-  .command("worktree")
-  .description("create a Gadget git worktree")
-  .allowExcessArguments(false)
-  .option("--worktree-name <name>", "name the generated worktree")
-  .option("--start", "start Codex in the generated worktree")
-  .option("--model <model>", "model to pass to Codex when using --start")
-  .option("--resume <session-id>", "resume an existing Codex session id when using --start")
-  .action(async (options) => {
-    await worktreeCommand({
-      worktreeName: options.worktreeName,
-      start: Boolean(options.start),
-      model: options.model,
-      resumeSessionId: options.resume,
     });
   });
 
@@ -58,12 +35,10 @@ program
   .command("codex")
   .description("start Codex with Gadget app-server integration")
   .allowExcessArguments(false)
-  .option("--worktree <name-or-path>", "start Codex in an existing git worktree")
   .option("--model <model>", "model to pass to Codex")
   .option("--resume <session-id>", "resume an existing Codex session id")
   .action(async (options) => {
     await startCommand({
-      worktree: options.worktree,
       model: options.model,
       resumeSessionId: options.resume,
     });
@@ -73,14 +48,13 @@ program
   .command("view")
   .description("open the diff viewer in clipboard mode")
   .allowExcessArguments(false)
-  .option("--worktree <name-or-path>", "open the diff viewer for a specific git worktree")
-  .action(async (options) => {
-    await openDiffViewer({ mode: "clipboard", worktree: options.worktree });
+  .action(async () => {
+    await openDiffViewer({ mode: "clipboard" });
   });
 
 program
   .command("cleanup")
-  .description("kill stale app-servers and remove inactive Gadget worktrees")
+  .description("kill stale app-servers and remove inactive session records")
   .allowExcessArguments(false)
   .action(async () => {
     const result = await cleanupGadgetResources({ cwd: process.cwd() });
@@ -103,39 +77,23 @@ try {
   process.exit(1);
 }
 
-async function startCommand(options: { worktree: string | undefined; model: string | undefined; resumeSessionId: string | undefined }): Promise<void> {
-  const target = await resolveCommandTargetOrExit(options.worktree);
-  await ensureGitRepo(target.worktree.cwd);
-  await startRuntimeOrExit(target.worktree.cwd, startOptions(options.model, options.resumeSessionId));
+async function startCommand(options: { model: string | undefined; resumeSessionId: string | undefined }): Promise<void> {
+  const cwd = process.cwd();
+  await ensureGitRepo(cwd);
+  await startRuntimeOrExit(cwd, startOptions(options.model, options.resumeSessionId));
 }
 
-async function worktreeCommand(options: { worktreeName: string | undefined; start: boolean; model: string | undefined; resumeSessionId: string | undefined }): Promise<void> {
-  await ensureGitRepo(process.cwd());
-  const source = await resolveWorktreeTarget(process.cwd());
-  const worktree = await createGadgetWorktree(source.cwd, options.worktreeName);
-  console.log(`Worktree: ${worktree.worktreeName}`);
-  console.log(`Path: ${worktree.worktreePath}`);
-
-  if (!options.start) {
-    return;
-  }
-
-  await startRuntimeOrExit(worktree.cwd, {
-    ...startOptions(options.model, options.resumeSessionId),
-    sourceCwd: source.cwd,
-  });
-}
-
-async function openDiffViewer(options: { mode: DiffMode; worktree: string | undefined; initialFile?: InitialFileTarget }): Promise<void> {
-  const target = await resolveCommandTargetOrExit(options.worktree);
-  await ensureGitRepo(target.worktree.cwd);
-  const runTarget = await resolveDiffRunTarget(target, options.mode);
+async function openDiffViewer(options: { mode: DiffMode; initialFile?: InitialFileTarget }): Promise<void> {
+  const cwd = process.cwd();
+  await ensureGitRepo(cwd);
+  const gitInfo = await readGitInfoOrExit(cwd);
+  const runTarget = await resolveDiffRunTarget(cwd, gitInfo, options.mode);
 
   if (runTarget.kind === "clipboard") {
     await runGadgetUi({
       cwd: runTarget.cwd,
       adapter: new ClipboardAdapter(),
-      worktree: runTarget.worktree,
+      gitInfo: runTarget.gitInfo,
       ...(options.initialFile ? { initialFile: options.initialFile } : {}),
     });
     return;
@@ -144,7 +102,7 @@ async function openDiffViewer(options: { mode: DiffMode; worktree: string | unde
   await runGadgetUi({
     cwd: runTarget.cwd,
     adapter: runTarget.kind === "session" ? createAdapterForSession(runTarget.session) : new ClipboardAdapter(),
-    ...(runTarget.worktree ? { worktree: runTarget.worktree } : {}),
+    ...(runTarget.gitInfo ? { gitInfo: runTarget.gitInfo } : {}),
     ...(runTarget.kind === "session-choice"
       ? {
         sessionChoices: runTarget.sessions,
@@ -155,7 +113,7 @@ async function openDiffViewer(options: { mode: DiffMode; worktree: string | unde
   });
 }
 
-async function startRuntimeOrExit(cwd: string, options: { model?: string; resumeSessionId?: string; sourceCwd?: string }): Promise<void> {
+async function startRuntimeOrExit(cwd: string, options: { model?: string; resumeSessionId?: string }): Promise<void> {
   try {
     await startCodexRuntime(cwd, options);
   } catch (error) {
@@ -164,17 +122,17 @@ async function startRuntimeOrExit(cwd: string, options: { model?: string; resume
   }
 }
 
-async function resolveDiffRunTarget(target: CommandTarget, mode: DiffMode): Promise<DiffRunTarget> {
+async function resolveDiffRunTarget(cwd: string, gitInfo: GitInfo, mode: DiffMode): Promise<DiffRunTarget> {
   if (mode === "clipboard") {
-    return { kind: "clipboard", cwd: target.worktree.cwd, worktree: target.worktree };
+    return { kind: "clipboard", cwd, gitInfo };
   }
 
-  const sessions = await listRuntimeSessions(target.worktree, target.selectedWorktreeName);
+  const sessions = await listRuntimeSessions(cwd);
   if (sessions.length === 0) {
-    return { kind: "clipboard", cwd: target.worktree.cwd, worktree: target.worktree };
+    return { kind: "clipboard", cwd, gitInfo };
   }
   if (sessions.length > 1) {
-    return { kind: "session-choice", cwd: target.worktree.cwd, sessions, worktree: target.worktree };
+    return { kind: "session-choice", cwd, sessions, gitInfo };
   }
 
   const session = sessions[0]!;
@@ -182,12 +140,12 @@ async function resolveDiffRunTarget(target: CommandTarget, mode: DiffMode): Prom
     kind: "session",
     cwd: session.cwd,
     session,
-    ...(session.cwd === target.worktree.cwd ? { worktree: target.worktree } : {}),
+    ...(session.cwd === gitInfo.cwd ? { gitInfo } : {}),
   };
 }
 
-async function listRuntimeSessions(target: WorktreeInfo, worktreeName: string | undefined): Promise<RuntimeSession[]> {
-  return await listCodexRuntimeSessions(target, worktreeName);
+async function listRuntimeSessions(cwd: string): Promise<RuntimeSession[]> {
+  return await listCodexRuntimeSessions(cwd);
 }
 
 function createAdapterForSession(session: RuntimeSession) {
@@ -207,16 +165,12 @@ async function ensureGitRepo(cwd: string): Promise<void> {
   }
 }
 
-async function resolveCommandTargetOrExit(worktreeNameOrPath: string | undefined): Promise<CommandTarget> {
+async function readGitInfoOrExit(cwd: string): Promise<GitInfo> {
   try {
-    const worktree = await resolveWorktreeTarget(process.cwd(), worktreeNameOrPath);
-    return {
-      worktree,
-      selectedWorktreeName: worktreeNameOrPath ?? (!worktree.isPrimary ? worktree.worktreeName : undefined),
-    };
+    return await readGitInfo(cwd);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.error("Gadget needs a git repository or a known git worktree.");
+    console.error("Gadget needs a git repository.");
     if (detail) {
       console.error(detail);
     }
@@ -261,17 +215,7 @@ function printCleanupResult(result: GadgetCleanupResult): void {
 
   console.log(`Removed session records: ${result.removedSessions.length}`);
   for (const session of result.removedSessions) {
-    console.log(`  ${session.remoteUrl} ${session.worktreeName ?? session.cwd}`);
-  }
-
-  console.log(`Removed worktrees: ${result.removedWorktrees.length}`);
-  for (const worktree of result.removedWorktrees) {
-    console.log(`  ${worktree.path}${worktree.branchName ? ` (${worktree.branchName})` : ""}`);
-  }
-
-  console.log(`Skipped worktrees: ${result.skippedWorktrees.length}`);
-  for (const worktree of result.skippedWorktrees) {
-    console.log(`  ${worktree.path}: ${firstLine(worktree.reason)}`);
+    console.log(`  ${session.remoteUrl} ${session.cwd}`);
   }
 
   console.log(`Active sessions kept: ${result.activeSessions.length}`);
@@ -281,8 +225,4 @@ function printCleanupResult(result: GadgetCleanupResult): void {
       console.error(`  ${error}`);
     }
   }
-}
-
-function firstLine(value: string): string {
-  return value.split(/\r?\n/)[0] ?? value;
 }

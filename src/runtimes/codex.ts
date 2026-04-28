@@ -1,19 +1,15 @@
 import { CodexAppServerAdapter, listLiveCodexSessions, startCodexSession, type GadgetCodexSession } from "../adapters/codex-app-server-adapter";
-import type { WorktreeInfo } from "../git";
 import type { RuntimeSession } from "./types";
 
-export async function startCodexRuntime(cwd: string, options: { model?: string; resumeSessionId?: string; sourceCwd?: string } = {}): Promise<void> {
+export async function startCodexRuntime(cwd: string, options: { model?: string; resumeSessionId?: string } = {}): Promise<void> {
   await startCodexSession(cwd, options);
 }
 
-export async function listCodexRuntimeSessions(target: WorktreeInfo, worktreeName?: string): Promise<RuntimeSession[]> {
-  const sessions = await listLiveCodexSessions(target.cwd, worktreeName);
+export async function listCodexRuntimeSessions(cwd: string): Promise<RuntimeSession[]> {
+  const sessions = await listLiveCodexSessions(cwd);
   return sessions.map((session) => ({
     client: "codex",
     cwd: session.cwd,
-    repositoryRoot: session.repositoryRoot ?? target.repositoryRoot,
-    worktreePath: session.worktreePath ?? session.cwd,
-    worktreeName: session.worktreeName ?? target.worktreeName,
     label: "codex",
     status: session.status,
     preview: session.preview,

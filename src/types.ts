@@ -24,9 +24,6 @@ export type DiffState = {
   baseRef: string;
   baseRefLabel: string;
   branchName: string;
-  repositoryRoot: string;
-  worktreeName: string;
-  worktreePath: string;
   files: DiffFile[];
   refreshedAt: number;
 };

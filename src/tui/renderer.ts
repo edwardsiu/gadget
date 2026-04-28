@@ -277,7 +277,6 @@ export class GadgetRenderer {
 
   renderStatus(options: {
     cwdName: string;
-    worktreeName: string;
     branchName: string;
     width: number;
     hasLeftBorder: boolean;
@@ -289,7 +288,6 @@ export class GadgetRenderer {
   }): void {
     this.diffTopBarText.content = formatDiffTopBar(
       options.cwdName,
-      options.worktreeName,
       options.branchName,
       options.width,
       options.hasLeftBorder,

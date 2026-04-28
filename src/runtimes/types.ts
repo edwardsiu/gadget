@@ -5,9 +5,6 @@ export type GadgetClient = "codex";
 export type RuntimeSession = {
   client: GadgetClient;
   cwd: string;
-  repositoryRoot: string;
-  worktreePath: string;
-  worktreeName: string;
   label: string;
   status: string;
   preview: string;

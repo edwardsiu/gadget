@@ -1,13 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { constants } from "node:fs";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { AgentAdapter, AgentComment, AgentSessionInfo } from "../types";
 import { formatCommentPrompt } from "../comments";
-import { listWorktrees, readWorktreeInfo, runGit, type ListedWorktree } from "../git";
+import { readGitInfo } from "../git";
 
 type Pending = {
   resolve: (value: any) => void;
@@ -26,27 +25,12 @@ export type GadgetCodexSession = {
   threadId: string | null;
   appServerPid: number | null;
   model: string | null;
-  sourceCwd?: string;
-  repositoryRoot?: string;
-  worktreePath?: string;
-  worktreeName?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type GadgetWorktreeRecord = {
-  sourceCwd: string;
-  repositoryRoot: string;
-  worktreePath: string;
-  worktreeName: string;
-  branchName: string;
   createdAt: string;
   updatedAt: string;
 };
 
 type GadgetSessionRegistry = {
   projects: Record<string, GadgetCodexSession[]>;
-  worktrees?: Record<string, GadgetWorktreeRecord[]>;
 };
 
 export type LiveGadgetCodexSession = GadgetCodexSession & {
@@ -59,7 +43,6 @@ type StartCodexSessionOptions = {
   resumeSessionId?: string;
   codexPath?: string;
   launchCli?: boolean;
-  sourceCwd?: string;
 };
 
 type CodexAppServerOptions = {
@@ -69,8 +52,6 @@ type CodexAppServerOptions = {
 export type GadgetCleanupResult = {
   killedAppServers: ProcessInfo[];
   removedSessions: GadgetCodexSession[];
-  removedWorktrees: Array<{ repositoryRoot: string; path: string; branchName: string | null }>;
-  skippedWorktrees: Array<{ repositoryRoot: string; path: string; reason: string }>;
   activeSessions: GadgetCodexSession[];
   errors: string[];
 };
@@ -262,12 +243,12 @@ export class CodexAppServerAdapter implements AgentAdapter {
 }
 
 export async function startCodexSession(cwd: string, options: StartCodexSessionOptions = {}): Promise<GadgetCodexSession> {
-  const worktree = await readWorktreeInfo(cwd);
+  const gitInfo = await readGitInfo(cwd);
   const codexPath = options.codexPath ?? "codex";
   const port = await findFreePort();
   const remoteUrl = `ws://127.0.0.1:${port}`;
   const appServer = spawn(codexPath, ["app-server", "--listen", remoteUrl], {
-    cwd: worktree.cwd,
+    cwd: gitInfo.cwd,
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
@@ -280,40 +261,25 @@ export async function startCodexSession(cwd: string, options: StartCodexSessionO
     await waitForAppServerReady(remoteUrl, appServerRuntime);
     const now = new Date().toISOString();
     session = {
-      cwd: worktree.cwd,
+      cwd: gitInfo.cwd,
       remoteUrl,
       threadId: null,
       appServerPid: appServer.pid ?? null,
       model: options.model ?? null,
-      sourceCwd: options.sourceCwd ?? worktree.cwd,
-      repositoryRoot: worktree.repositoryRoot,
-      worktreePath: worktree.worktreePath,
-      worktreeName: worktree.worktreeName,
       createdAt: now,
       updatedAt: now,
     };
-    if (isGadgetCreatedWorktree(worktree)) {
-      await upsertKnownWorktree(worktree.repositoryRoot, {
-        sourceCwd: options.sourceCwd ?? worktree.cwd,
-        repositoryRoot: worktree.repositoryRoot,
-        worktreePath: worktree.worktreePath,
-        worktreeName: worktree.worktreeName,
-        branchName: worktree.branchName,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-    await upsertSession(worktree.repositoryRoot, session);
+    await upsertSession(gitInfo.cwd, session);
     if (options.launchCli !== false) {
       console.log(`App server: ${session.remoteUrl}`);
-      await launchCodexCli(worktree.cwd, codexPath, session, appServerRuntime, options.resumeSessionId);
+      await launchCodexCli(gitInfo.cwd, codexPath, session, appServerRuntime, options.resumeSessionId);
     }
     return session;
   } finally {
     if (options.launchCli !== false) {
       try {
         if (session) {
-          await removeSession(worktree.repositoryRoot, session);
+          await removeSession(gitInfo.cwd, session);
         }
       } finally {
         await stopAppServer(appServerRuntime.child);
@@ -322,18 +288,12 @@ export async function startCodexSession(cwd: string, options: StartCodexSessionO
   }
 }
 
-export async function cleanupGadgetResources(options: { cwd?: string } = {}): Promise<GadgetCleanupResult> {
+export async function cleanupGadgetResources(_options: { cwd?: string } = {}): Promise<GadgetCleanupResult> {
   const registry = await readSessionRegistry();
   const allSessions = registrySessions(registry);
-  const knownWorktrees = registryWorktrees(registry);
   const processes = await listProcesses();
   const appServers = processes.map(withRemoteUrl).filter(isCodexAppServerProcess);
   const activeRemoteUrls = new Set(processes.map(parseCodexRemoteUrl).filter((value): value is string => Boolean(value)));
-  const activeWorktreePaths = new Set(processes.map(parseCodexRemoteCwd).filter((value): value is string => Boolean(value)));
-  const currentWorktree = await tryReadWorktreeInfo(options.cwd ?? process.cwd());
-  if (currentWorktree) {
-    activeWorktreePaths.add(currentWorktree.cwd);
-  }
 
   const killedAppServers: ProcessInfo[] = [];
   const errors: string[] = [];
@@ -353,78 +313,20 @@ export async function cleanupGadgetResources(options: { cwd?: string } = {}): Pr
   const activeAppServerRemoteUrls = new Set(appServers.filter((appServer) => isActiveAppServer(appServer, activeRemoteUrls)).map((appServer) => appServer.remoteUrl).filter((value): value is string => Boolean(value)));
   const activeSessions = allSessions.filter((session) => activeRemoteUrls.has(session.remoteUrl) || activeAppServerRemoteUrls.has(session.remoteUrl));
   const removedSessions = allSessions.filter((session) => !activeRemoteUrls.has(session.remoteUrl) && !activeAppServerRemoteUrls.has(session.remoteUrl));
-  for (const session of activeSessions) {
-    activeWorktreePaths.add(session.worktreePath ?? session.cwd);
-  }
 
   registry.projects = groupSessionsByProject(activeSessions);
-
-  const repositoryRoots = new Set<string>();
-  if (currentWorktree) {
-    repositoryRoots.add(currentWorktree.repositoryRoot);
-  }
-  for (const session of allSessions) {
-    repositoryRoots.add(session.repositoryRoot ?? session.cwd);
-  }
-  for (const record of knownWorktrees) {
-    repositoryRoots.add(record.repositoryRoot);
-  }
-
-  const knownWorktreePaths = new Set(knownWorktrees.map((record) => record.worktreePath));
-  const removedWorktrees: GadgetCleanupResult["removedWorktrees"] = [];
-  const skippedWorktrees: GadgetCleanupResult["skippedWorktrees"] = [];
-
-  for (const repositoryRoot of repositoryRoots) {
-    let worktrees: ListedWorktree[];
-    try {
-      worktrees = await listWorktrees(repositoryRoot);
-    } catch (error) {
-      errors.push(`failed to list worktrees for ${repositoryRoot}: ${error instanceof Error ? error.message : String(error)}`);
-      continue;
-    }
-
-    for (const worktree of worktrees) {
-      if (worktree.path === repositoryRoot) {
-        continue;
-      }
-      if (!isGadgetOwnedWorktree(worktree, knownWorktreePaths)) {
-        continue;
-      }
-      if (activeWorktreePaths.has(worktree.path)) {
-        skippedWorktrees.push({ repositoryRoot, path: worktree.path, reason: "active" });
-        continue;
-      }
-
-      try {
-        await runGit(repositoryRoot, ["worktree", "remove", worktree.path]);
-        removedWorktrees.push({ repositoryRoot, path: worktree.path, branchName: worktree.branchName });
-      } catch (error) {
-        skippedWorktrees.push({ repositoryRoot, path: worktree.path, reason: error instanceof Error ? error.message : String(error) });
-      }
-    }
-  }
-
-  const removedWorktreePaths = new Set(removedWorktrees.map((worktree) => worktree.path));
-  const nextKnownWorktrees = await pruneKnownWorktrees(registry.worktrees ?? {}, removedWorktreePaths);
-  if (nextKnownWorktrees) {
-    registry.worktrees = nextKnownWorktrees;
-  } else {
-    delete registry.worktrees;
-  }
   await writeSessionRegistry(registry);
 
   return {
     killedAppServers,
     removedSessions,
-    removedWorktrees,
-    skippedWorktrees,
     activeSessions,
     errors,
   };
 }
 
-export async function selectCodexSession(cwd: string, worktreeName?: string): Promise<GadgetCodexSession | null> {
-  const liveSessions = await listLiveCodexSessions(cwd, worktreeName);
+export async function selectCodexSession(cwd: string): Promise<GadgetCodexSession | null> {
+  const liveSessions = await listLiveCodexSessions(cwd);
   if (liveSessions.length === 0) {
     return null;
   }
@@ -436,7 +338,7 @@ export async function selectCodexSession(cwd: string, worktreeName?: string): Pr
   console.log(`Project: ${cwd}`);
   liveSessions.forEach((session, index) => {
     const preview = session.preview.trim() || "(no preview yet)";
-    console.log(`${index + 1}. ${session.worktreeName ?? basename(session.cwd)} ${session.threadId} ${session.status} ${preview.slice(0, 80)}`);
+    console.log(`${index + 1}. ${basename(session.cwd)} ${session.threadId} ${session.status} ${preview.slice(0, 80)}`);
   });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -453,9 +355,8 @@ export async function selectCodexSession(cwd: string, worktreeName?: string): Pr
   }
 }
 
-export async function listLiveCodexSessions(cwd: string, worktreeName?: string): Promise<LiveGadgetCodexSession[]> {
-  const target = await readWorktreeInfo(cwd);
-  const sessions = (await readAllSessions()).filter((session) => sessionMatchesTarget(session, target, worktreeName));
+export async function listLiveCodexSessions(cwd: string): Promise<LiveGadgetCodexSession[]> {
+  const sessions = (await readAllSessions()).filter((session) => session.cwd === cwd);
   const liveSessions: LiveGadgetCodexSession[] = [];
 
   for (const session of sessions) {
@@ -670,17 +571,6 @@ async function upsertSession(cwd: string, session: GadgetCodexSession): Promise<
   await writeSessions(cwd, sessions);
 }
 
-async function upsertKnownWorktree(cwd: string, record: GadgetWorktreeRecord): Promise<void> {
-  const registry = await readSessionRegistry();
-  const existing = (registry.worktrees?.[cwd] ?? []).filter((candidate) => candidate.worktreePath !== record.worktreePath);
-  existing.push(record);
-  registry.worktrees = {
-    ...(registry.worktrees ?? {}),
-    [cwd]: existing,
-  };
-  await writeSessionRegistry(registry);
-}
-
 async function removeSession(cwd: string, session: GadgetCodexSession): Promise<void> {
   const sessions = (await readSessions(cwd)).filter((existing) => {
     if (existing.remoteUrl === session.remoteUrl) {
@@ -708,43 +598,14 @@ function registrySessions(registry: GadgetSessionRegistry): GadgetCodexSession[]
   return Object.values(registry.projects).flat().filter(isGadgetCodexSession);
 }
 
-function registryWorktrees(registry: GadgetSessionRegistry): GadgetWorktreeRecord[] {
-  return Object.values(registry.worktrees ?? {}).flat().filter(isGadgetWorktreeRecord);
-}
-
 function groupSessionsByProject(sessions: GadgetCodexSession[]): Record<string, GadgetCodexSession[]> {
   const projects: Record<string, GadgetCodexSession[]> = {};
   for (const session of sessions) {
-    const project = session.repositoryRoot ?? session.cwd;
+    const project = session.cwd;
     projects[project] ??= [];
     projects[project].push(session);
   }
   return projects;
-}
-
-async function pruneKnownWorktrees(
-  worktrees: Record<string, GadgetWorktreeRecord[]>,
-  removedWorktreePaths: Set<string>,
-): Promise<Record<string, GadgetWorktreeRecord[]> | undefined> {
-  const next: Record<string, GadgetWorktreeRecord[]> = {};
-
-  for (const [project, records] of Object.entries(worktrees)) {
-    const kept: GadgetWorktreeRecord[] = [];
-    for (const record of records) {
-      if (removedWorktreePaths.has(record.worktreePath)) {
-        continue;
-      }
-      if (!(await pathExists(record.worktreePath))) {
-        continue;
-      }
-      kept.push(record);
-    }
-    if (kept.length > 0) {
-      next[project] = kept;
-    }
-  }
-
-  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 async function readSessionRegistry(): Promise<GadgetSessionRegistry> {
@@ -780,15 +641,7 @@ function isGadgetSessionRegistry(value: unknown): value is GadgetSessionRegistry
   if (!projects || typeof projects !== "object" || Array.isArray(projects)) {
     return false;
   }
-  const worktrees = (value as Record<string, unknown>).worktrees;
-  return (
-    Object.values(projects).every((projectSessions) => Array.isArray(projectSessions) && projectSessions.every(isGadgetCodexSession)) &&
-    (worktrees === undefined ||
-      (typeof worktrees === "object" &&
-        worktrees !== null &&
-        !Array.isArray(worktrees) &&
-        Object.values(worktrees).every((projectWorktrees) => Array.isArray(projectWorktrees) && projectWorktrees.every(isGadgetWorktreeRecord))))
-  );
+  return Object.values(projects).every((projectSessions) => Array.isArray(projectSessions) && projectSessions.every(isGadgetCodexSession));
 }
 
 function isGadgetCodexSession(value: unknown): value is GadgetCodexSession {
@@ -802,44 +655,6 @@ function isGadgetCodexSession(value: unknown): value is GadgetCodexSession {
     (typeof candidate.threadId === "string" || candidate.threadId === null) &&
     (typeof candidate.appServerPid === "number" || candidate.appServerPid === null) &&
     (typeof candidate.model === "string" || candidate.model === null) &&
-    optionalString(candidate.sourceCwd) &&
-    optionalString(candidate.repositoryRoot) &&
-    optionalString(candidate.worktreePath) &&
-    optionalString(candidate.worktreeName) &&
-    typeof candidate.createdAt === "string" &&
-    typeof candidate.updatedAt === "string"
-  );
-}
-
-function sessionMatchesTarget(session: GadgetCodexSession, target: Awaited<ReturnType<typeof readWorktreeInfo>>, worktreeName?: string): boolean {
-  const sessionWorktreeName = session.worktreeName ?? basename(session.cwd);
-  if (worktreeName && sessionWorktreeName !== worktreeName && session.cwd !== target.cwd) {
-    return false;
-  }
-  if (session.cwd === target.cwd) {
-    return true;
-  }
-  if (session.repositoryRoot && session.repositoryRoot === target.repositoryRoot) {
-    return true;
-  }
-  return false;
-}
-
-function optionalString(value: unknown): boolean {
-  return value === undefined || typeof value === "string";
-}
-
-function isGadgetWorktreeRecord(value: unknown): value is GadgetWorktreeRecord {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.sourceCwd === "string" &&
-    typeof candidate.repositoryRoot === "string" &&
-    typeof candidate.worktreePath === "string" &&
-    typeof candidate.worktreeName === "string" &&
-    typeof candidate.branchName === "string" &&
     typeof candidate.createdAt === "string" &&
     typeof candidate.updatedAt === "string"
   );
@@ -1155,54 +970,6 @@ function parseCodexRemoteUrl(processInfo: ProcessInfo): string | undefined {
     return undefined;
   }
   return /(?:^|\s)--remote\s+(ws:\/\/[^\s]+)/.exec(processInfo.command)?.[1];
-}
-
-function parseCodexRemoteCwd(processInfo: ProcessInfo): string | undefined {
-  if (!/\bcodex\b.*\b--remote\b/.test(processInfo.command)) {
-    return undefined;
-  }
-  return /(?:^|\s)-C\s+([^\s]+)/.exec(processInfo.command)?.[1];
-}
-
-function isGadgetOwnedWorktree(worktree: ListedWorktree, knownWorktreePaths: Set<string>): boolean {
-  if (knownWorktreePaths.has(worktree.path)) {
-    return true;
-  }
-  if (worktree.branchName?.startsWith("gadget/")) {
-    return true;
-  }
-  return isUnderGadgetWorktreeRoot(worktree.path) && basename(worktree.path).startsWith("ggt-");
-}
-
-async function tryReadWorktreeInfo(cwd: string): Promise<Awaited<ReturnType<typeof readWorktreeInfo>> | null> {
-  try {
-    return await readWorktreeInfo(cwd);
-  } catch {
-    return null;
-  }
-}
-
-function isGadgetCreatedWorktree(worktree: Awaited<ReturnType<typeof readWorktreeInfo>>): boolean {
-  if (worktree.isPrimary) {
-    return false;
-  }
-  if (worktree.branchName.startsWith("gadget/")) {
-    return true;
-  }
-  return isUnderGadgetWorktreeRoot(worktree.worktreePath) && basename(worktree.worktreePath).startsWith("ggt-");
-}
-
-function isUnderGadgetWorktreeRoot(path: string): boolean {
-  return path.startsWith(join(homedir(), ".gadget", "worktrees") + "/");
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function findFreePort(): Promise<number> {

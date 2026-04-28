@@ -10,7 +10,7 @@ import {
 import type { KeyEvent } from "@opentui/core";
 import { basename } from "node:path";
 import { createComment, formatReviewPrompt } from "../comments";
-import { createDiffWatcher, listDiffBaseCandidates, listSearchableFiles, readDiffState, type DiffBaseCandidate, type ReadDiffStateOptions, type WorktreeInfo } from "../git";
+import { createDiffWatcher, listDiffBaseCandidates, listSearchableFiles, readDiffState, type DiffBaseCandidate, type GitInfo, type ReadDiffStateOptions } from "../git";
 import type { RuntimeAdapterFactory, RuntimeSession } from "../runtimes/types";
 import {
   createScratchpadDocument,
@@ -129,12 +129,12 @@ registerAdditionalSyntaxParsers();
 export async function runGadgetUi(options: {
   cwd: string;
   adapter: AgentAdapter;
-  worktree?: WorktreeInfo;
+  gitInfo?: GitInfo;
   initialFile?: InitialFileTarget;
   sessionChoices?: RuntimeSession[];
   createAdapterForSession?: RuntimeAdapterFactory;
 }): Promise<void> {
-  const app = new GadgetUi(options.cwd, options.adapter, options.worktree, options.initialFile, options.sessionChoices ?? [], options.createAdapterForSession);
+  const app = new GadgetUi(options.cwd, options.adapter, options.gitInfo, options.initialFile, options.sessionChoices ?? [], options.createAdapterForSession);
   await app.start();
   await new Promise<void>(() => undefined);
 }
@@ -221,24 +221,21 @@ class GadgetUi {
   private diffStateSignature = "";
   private diffRefreshInFlight = false;
   private pendingDiffRefreshOptions: ReadDiffStateOptions | null = null;
-  private initialWorktreeConsumed = false;
+  private initialGitInfoConsumed = false;
 
   constructor(
     private cwd: string,
     private adapter: AgentAdapter,
-    private readonly initialWorktree?: WorktreeInfo,
+    private readonly initialGitInfo?: GitInfo,
     private readonly initialFile?: InitialFileTarget,
     private sessionChoices: RuntimeSession[] = [],
     private readonly createAdapterForSession?: RuntimeAdapterFactory,
   ) {
     this.state = {
-      cwd: initialWorktree?.cwd ?? cwd,
+      cwd: initialGitInfo?.cwd ?? cwd,
       baseRef: "HEAD",
       baseRefLabel: "HEAD",
-      branchName: initialWorktree?.branchName ?? "HEAD",
-      repositoryRoot: initialWorktree?.repositoryRoot ?? cwd,
-      worktreeName: initialWorktree?.worktreeName ?? basename(cwd),
-      worktreePath: initialWorktree?.worktreePath ?? cwd,
+      branchName: initialGitInfo?.branchName ?? "HEAD",
       files: [],
       refreshedAt: Date.now(),
     };
@@ -878,7 +875,7 @@ class GadgetUi {
   private async refreshDiff(options: ReadDiffStateOptions = {}): Promise<boolean> {
     const fallbackSelectedFilePath = this.selectedFile()?.filePath ?? null;
     const nextState = await readDiffState(this.cwd, this.readDiffStateOptions(options));
-    this.initialWorktreeConsumed = true;
+    this.initialGitInfoConsumed = true;
     const nextSignature = diffStateSignature(nextState);
     if (this.diffLoaded && nextSignature === this.diffStateSignature) {
       return false;
@@ -920,7 +917,7 @@ class GadgetUi {
     return {
       ...options,
       ...(this.diffBaseOverride && !options.baseRef ? { baseRef: this.diffBaseOverride } : {}),
-      ...(!this.initialWorktreeConsumed && this.initialWorktree?.cwd === this.cwd ? { worktree: this.initialWorktree } : {}),
+      ...(!this.initialGitInfoConsumed && this.initialGitInfo?.cwd === this.cwd ? { gitInfo: this.initialGitInfo } : {}),
     };
   }
 
@@ -1202,7 +1199,6 @@ class GadgetUi {
     const file = this.selectedFile();
     this.view.renderStatus({
       cwdName: basename(this.state.cwd),
-      worktreeName: this.hasWorktree() ? this.state.worktreeName : "",
       branchName: this.state.branchName,
       width: this.diffPaneWidth(),
       hasLeftBorder: this.diffHasLeftBorder(),
@@ -1483,10 +1479,6 @@ class GadgetUi {
       return;
     }
     await this.refreshCurrentFileView(file);
-  }
-
-  private hasWorktree(): boolean {
-    return this.state.worktreePath !== this.state.repositoryRoot;
   }
 
   private diffBorderFg(): string {
@@ -2648,9 +2640,6 @@ class GadgetUi {
     this.state = {
       ...this.state,
       cwd: session.cwd,
-      repositoryRoot: session.repositoryRoot,
-      worktreeName: session.worktreeName,
-      worktreePath: session.worktreePath,
     };
     await this.watcher?.close();
     this.watcher = createDiffWatcher(this.cwd, () => {

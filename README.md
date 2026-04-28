@@ -57,9 +57,6 @@ gadget some/file.txt:50
 # Start Codex with Gadget app-server integration.
 gadget codex
 
-# Create a Gadget worktree and start Codex there.
-gadget worktree --start
-
 # Open the diff viewer in clipboard mode.
 gadget view
 ```

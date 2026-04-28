@@ -15,10 +15,10 @@ export function navWidthFor(mode: NavMode): number {
   return mode === "compact" ? 0 : 34;
 }
 
-export function formatDiffTopBar(cwd: string, worktreeName: string, branchName: string, width: number, hasLeftBorder: boolean, borderFg: string, reviewLabel: string): StyledText {
+export function formatDiffTopBar(cwd: string, branchName: string, width: number, hasLeftBorder: boolean, borderFg: string, reviewLabel: string): StyledText {
   const usableWidth = Math.max(1, width);
   const chunks: TextChunk[] = [];
-  appendDiffTopBorder(chunks, cwd, worktreeName, branchName, usableWidth, hasLeftBorder ? NAV_BORDER.topLeft : null, borderFg, reviewLabel);
+  appendDiffTopBorder(chunks, cwd, branchName, usableWidth, hasLeftBorder ? NAV_BORDER.topLeft : null, borderFg, reviewLabel);
   return new StyledText(chunks);
 }
 
@@ -113,7 +113,6 @@ export function formatFileCardNav(rows: Array<{ file: DiffFile; selected: boolea
 function appendDiffTopBorder(
   chunks: TextChunk[],
   cwd: string,
-  worktreeName: string,
   branchName: string,
   width: number,
   leftCorner: string | null,
@@ -137,8 +136,8 @@ function appendDiffTopBorder(
   const reviewText = reviewLabel ? ` ${reviewLabel} ` : "";
   const reviewTextWidth = reviewText.length <= Math.max(0, lineWidth - helpLabel.length) ? reviewText.length : 0;
   const labelWidth = Math.max(0, lineWidth - helpLabel.length - reviewTextWidth - 3);
-  const labels = fitDiffTopLabels(cwd, worktreeName, branchName, labelWidth);
-  const usedWidth = labels.cwd.length + labels.worktreeSeparator.length + labels.worktree.length + labels.branchSeparator.length + labels.branch.length;
+  const labels = fitDiffTopLabels(cwd, branchName, labelWidth);
+  const usedWidth = labels.cwd.length + labels.branchSeparator.length + labels.branch.length;
   const labelSegmentWidth = usedWidth > 0 ? usedWidth + 3 : 0;
   const spacerWidth = Math.max(0, lineWidth - labelSegmentWidth - reviewTextWidth - helpLabel.length);
 
@@ -147,8 +146,6 @@ function appendDiffTopBorder(
     appendStyledChunk(chunks, NAV_BORDER.horizontal, { fg: borderFg, bg: COLORS.bg });
     appendStyledChunk(chunks, " ", { bg: COLORS.bg });
     appendStyledChunk(chunks, labels.cwd, { fg: COLORS.statInfo, bg: COLORS.bg });
-    appendStyledChunk(chunks, labels.worktreeSeparator, { fg: COLORS.muted, bg: COLORS.bg });
-    appendStyledChunk(chunks, labels.worktree, { fg: COLORS.text, bg: COLORS.bg });
     appendStyledChunk(chunks, labels.branchSeparator, { fg: COLORS.muted, bg: COLORS.bg });
     appendStyledChunk(chunks, labels.branch, { fg: COLORS.statMixed, bg: COLORS.bg });
     appendStyledChunk(chunks, " ", { bg: COLORS.bg });
@@ -169,76 +166,48 @@ function appendDiffLeftCorner(chunks: TextChunk[], leftCorner: string | null, bo
   }
 }
 
-function fitDiffTopLabels(cwd: string, worktreeName: string, branchName: string, width: number): {
+function fitDiffTopLabels(cwd: string, branchName: string, width: number): {
   cwd: string;
-  worktreeSeparator: string;
-  worktree: string;
   branchSeparator: string;
   branch: string;
 } {
   if (width <= 0) {
-    return { cwd: "", worktreeSeparator: "", worktree: "", branchSeparator: "", branch: "" };
+    return { cwd: "", branchSeparator: "", branch: "" };
   }
 
-  const worktreeSeparator = worktreeName ? "  " : "";
   const branchSeparator = branchName ? "  " : "";
   if (branchName === "" || width < branchSeparator.length + 2) {
     return {
       cwd: truncateMiddle(cwd, width),
-      worktreeSeparator: "",
-      worktree: "",
       branchSeparator: "",
       branch: "",
     };
   }
 
-  const fullWidth = cwd.length + worktreeSeparator.length + worktreeName.length + branchSeparator.length + branchName.length;
+  const fullWidth = cwd.length + branchSeparator.length + branchName.length;
   if (fullWidth <= width) {
-    return { cwd, worktreeSeparator, worktree: worktreeName, branchSeparator, branch: branchName };
+    return { cwd, branchSeparator, branch: branchName };
   }
 
   const minimumBranchWidth = Math.min(branchName.length, Math.max(1, Math.floor(width * 0.35)));
   let branchWidth = minimumBranchWidth;
-  let remainingWidth = width - branchSeparator.length - branchWidth;
+  const remainingWidth = width - branchSeparator.length - branchWidth;
   if (remainingWidth <= 0) {
     return {
       cwd: truncateMiddle(cwd, width),
-      worktreeSeparator: "",
-      worktree: "",
       branchSeparator: "",
       branch: "",
-    };
-  }
-
-  const worktreeBudget = worktreeName ? Math.min(worktreeName.length, Math.max(1, Math.floor(remainingWidth * 0.25))) : 0;
-  let worktreeWidth = Math.min(worktreeName.length, worktreeBudget);
-  const activeWorktreeSeparator = worktreeWidth > 0 ? worktreeSeparator : "";
-  remainingWidth -= activeWorktreeSeparator.length + worktreeWidth;
-  if (remainingWidth <= 0) {
-    branchWidth = width - branchSeparator.length;
-    return {
-      cwd: "",
-      worktreeSeparator: "",
-      worktree: "",
-      branchSeparator,
-      branch: truncateMiddle(branchName, Math.max(0, branchWidth)),
     };
   }
 
   let cwdWidth = remainingWidth;
   if (branchName.length <= branchWidth) {
     branchWidth = branchName.length;
-    cwdWidth = width - branchSeparator.length - branchWidth - activeWorktreeSeparator.length - worktreeWidth;
-  }
-  if (worktreeName.length <= worktreeWidth) {
-    worktreeWidth = worktreeName.length;
-    cwdWidth = width - branchSeparator.length - branchWidth - activeWorktreeSeparator.length - worktreeWidth;
+    cwdWidth = width - branchSeparator.length - branchWidth;
   }
 
   return {
     cwd: truncateMiddle(cwd, Math.max(0, cwdWidth)),
-    worktreeSeparator: activeWorktreeSeparator,
-    worktree: truncateMiddle(worktreeName, worktreeWidth),
     branchSeparator,
     branch: truncateMiddle(branchName, branchWidth),
   };

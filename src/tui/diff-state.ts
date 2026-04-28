@@ -6,8 +6,6 @@ export function diffStateSignature(state: DiffState): string {
     state.cwd,
     state.baseRef,
     state.branchName,
-    state.repositoryRoot,
-    state.worktreePath,
     ...state.files.map((file) => [
       file.filePath,
       file.additions,

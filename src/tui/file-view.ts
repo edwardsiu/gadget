@@ -7,7 +7,7 @@ export async function readCurrentFileLines(cwd: string, filePath: string): Promi
     const absolutePath = resolve(cwd, filePath);
     const file = Bun.file(absolutePath);
     if (!(await file.exists())) {
-      return [currentFileStatusLine(filePath, "File does not exist in the current worktree.")];
+      return [currentFileStatusLine(filePath, "File does not exist in the current directory.")];
     }
 
     const stat = await file.stat();
