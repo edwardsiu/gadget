@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path";
-import { Command, InvalidArgumentError } from "@commander-js/extra-typings";
+import { Command } from "@commander-js/extra-typings";
 import { ClipboardAdapter } from "./adapters/clipboard-adapter";
+import { untrackCmuxSession } from "./adapters/cmux-adapter";
 import { cleanupGadgetResources, type GadgetCleanupResult } from "./adapters/codex-app-server-adapter";
 import { assertGitRepo, readGitInfo, type GitInfo } from "./git";
+import { createClaudeRuntimeAdapter, listClaudeRuntimeSessions, startClaudeRuntime } from "./runtimes/claude";
 import { createCodexRuntimeAdapter, listCodexRuntimeSessions, startCodexRuntime } from "./runtimes/codex";
 import type { RuntimeSession } from "./runtimes/types";
 import { runGadgetUi, type InitialFileTarget } from "./tui";
@@ -63,11 +65,21 @@ program
   });
 
 program
-  .command("claude", { hidden: true })
+  .command("cmux-untrack", { hidden: true })
+  .argument("<token>")
+  .allowExcessArguments(false)
+  .action(async (token) => {
+    await untrackCmuxSession(token);
+  });
+
+program
+  .command("claude")
+  .description("start Claude, optionally with Gadget cmux integration")
   .allowUnknownOption(true)
   .allowExcessArguments(true)
-  .action(() => {
-    throw new InvalidArgumentError("Gadget does not connect to Claude directly. Use `gadget view` for clipboard mode.");
+  .argument("[claudeArgs...]", "arguments to pass to Claude")
+  .action(async (claudeArgs) => {
+    await startClaudeCommand(claudeArgs);
   });
 
 try {
@@ -81,6 +93,17 @@ async function startCommand(options: { model: string | undefined; resumeSessionI
   const cwd = process.cwd();
   await ensureGitRepo(cwd);
   await startRuntimeOrExit(cwd, startOptions(options.model, options.resumeSessionId));
+}
+
+async function startClaudeCommand(claudeArgs: string[]): Promise<void> {
+  const cwd = process.cwd();
+  await ensureGitRepo(cwd);
+  try {
+    await startClaudeRuntime(cwd, claudeArgs);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
 
 async function openDiffViewer(options: { mode: DiffMode; initialFile?: InitialFileTarget }): Promise<void> {
@@ -145,10 +168,16 @@ async function resolveDiffRunTarget(cwd: string, gitInfo: GitInfo, mode: DiffMod
 }
 
 async function listRuntimeSessions(cwd: string): Promise<RuntimeSession[]> {
-  return await listCodexRuntimeSessions(cwd);
+  return [
+    ...(await listCodexRuntimeSessions(cwd)),
+    ...(await listClaudeRuntimeSessions(cwd)),
+  ];
 }
 
 function createAdapterForSession(session: RuntimeSession) {
+  if (session.client === "claude") {
+    return createClaudeRuntimeAdapter(session);
+  }
   return createCodexRuntimeAdapter(session);
 }
 
