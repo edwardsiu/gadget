@@ -25,13 +25,6 @@ fi
 
 mkdir -p "$REPO_ROOT/bin" "$INSTALL_DIR"
 
-if [ -z "$GADGET_CMUX" ] && [ -f "$REPO_ROOT/bin/gadget" ]; then
-  EXISTING_CMUX=$(sed -n 's/^export GADGET_CMUX="\([^"]*\)"$/\1/p' "$REPO_ROOT/bin/gadget" | tail -n 1)
-  if [ -n "$EXISTING_CMUX" ]; then
-    GADGET_CMUX="$EXISTING_CMUX"
-  fi
-fi
-
 if [ -z "$GADGET_CMUX" ] && [ -f "$CONFIG_FILE" ]; then
   EXISTING_CMUX=$(sed -n 's/^[[:space:]]*cmux[[:space:]]*=[[:space:]]*\(true\|false\)[[:space:]]*$/\1/p' "$CONFIG_FILE" | tail -n 1)
   case "$EXISTING_CMUX" in
@@ -85,7 +78,6 @@ fi
 
 cat > "$REPO_ROOT/bin/gadget" <<EOF
 #!/bin/sh
-export GADGET_CMUX="$GADGET_CMUX"
 exec "$BUN_BIN" "$REPO_ROOT/src/index.ts" "\$@"
 EOF
 chmod +x "$REPO_ROOT/bin/gadget"

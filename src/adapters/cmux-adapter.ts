@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentAdapter, AgentComment, AgentSessionInfo } from "../types";
 import { formatCommentPrompt } from "../comments";
+import { readGadgetConfig } from "../config";
 
 export type GadgetCmuxSession = {
   token: string;
@@ -55,7 +56,7 @@ export class CmuxAdapter implements AgentAdapter {
 }
 
 export async function startClaudeCmuxSession(cwd: string, claudeArgs: string[] = []): Promise<void> {
-  if (!cmuxEnabled()) {
+  if (!(await cmuxEnabled())) {
     await runClaudeDirect(cwd, claudeArgs);
     return;
   }
@@ -127,8 +128,8 @@ export async function listLiveCmuxSessions(cwd: string): Promise<GadgetCmuxSessi
   return live;
 }
 
-export function cmuxEnabled(): boolean {
-  return process.env.GADGET_CMUX === "1" || process.env.GADGET_CMUX === "true";
+export async function cmuxEnabled(): Promise<boolean> {
+  return (await readGadgetConfig()).integrations.cmux;
 }
 
 async function runClaudeDirect(cwd: string, claudeArgs: string[]): Promise<void> {
