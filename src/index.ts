@@ -244,7 +244,7 @@ function printCleanupResult(result: GadgetCleanupResult): void {
 
   console.log(`Removed session records: ${result.removedSessions.length}`);
   for (const session of result.removedSessions) {
-    console.log(`  ${session.remoteUrl} ${session.cwd}`);
+    console.log(`  ${formatCleanupSession(session)}`);
   }
 
   console.log(`Active sessions kept: ${result.activeSessions.length}`);
@@ -254,4 +254,11 @@ function printCleanupResult(result: GadgetCleanupResult): void {
       console.error(`  ${error}`);
     }
   }
+}
+
+function formatCleanupSession(session: GadgetCleanupResult["removedSessions"][number]): string {
+  if ("remoteUrl" in session) {
+    return `${session.remoteUrl} ${session.cwd}`;
+  }
+  return `${session.client}:${session.transport} ${session.workspace} ${session.surface} ${session.cwd}`;
 }

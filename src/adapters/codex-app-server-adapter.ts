@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import type { AgentAdapter, AgentComment, AgentSessionInfo } from "../types";
 import { formatCommentPrompt } from "../comments";
 import { readGitInfo } from "../git";
-import { isGadgetCodexSessionRecord, readSessionRegistry, writeSessionRegistry, type GadgetCodexSessionRecord } from "../session-registry";
+import { isGadgetCmuxSessionRecord, isGadgetCodexSessionRecord, readSessionRegistry, writeSessionRegistry, type GadgetCodexSessionRecord, type GadgetSessionRecord } from "../session-registry";
 
 type Pending = {
   resolve: (value: any) => void;
@@ -38,8 +38,8 @@ type CodexAppServerOptions = {
 
 export type GadgetCleanupResult = {
   killedAppServers: ProcessInfo[];
-  removedSessions: GadgetCodexSession[];
-  activeSessions: GadgetCodexSession[];
+  removedSessions: GadgetSessionRecord[];
+  activeSessions: GadgetSessionRecord[];
   errors: string[];
 };
 
@@ -277,7 +277,9 @@ export async function startCodexSession(cwd: string, options: StartCodexSessionO
 
 export async function cleanupGadgetResources(_options: { cwd?: string } = {}): Promise<GadgetCleanupResult> {
   const registry = await readSessionRegistry();
-  const allSessions = registrySessions(registry);
+  const allSessions = Object.values(registry.projects).flat();
+  const codexSessions = allSessions.filter(isGadgetCodexSessionRecord);
+  const cmuxSessions = allSessions.filter(isGadgetCmuxSessionRecord);
   const processes = await listProcesses();
   const appServers = processes.map(withRemoteUrl).filter(isCodexAppServerProcess);
   const activeRemoteUrls = new Set(processes.map(parseCodexRemoteUrl).filter((value): value is string => Boolean(value)));
@@ -298,8 +300,21 @@ export async function cleanupGadgetResources(_options: { cwd?: string } = {}): P
   }
 
   const activeAppServerRemoteUrls = new Set(appServers.filter((appServer) => isActiveAppServer(appServer, activeRemoteUrls)).map((appServer) => appServer.remoteUrl).filter((value): value is string => Boolean(value)));
-  const activeSessions = allSessions.filter((session) => activeRemoteUrls.has(session.remoteUrl) || activeAppServerRemoteUrls.has(session.remoteUrl));
-  const removedSessions = allSessions.filter((session) => !activeRemoteUrls.has(session.remoteUrl) && !activeAppServerRemoteUrls.has(session.remoteUrl));
+  const activeCodexSessions = codexSessions.filter((session) => activeRemoteUrls.has(session.remoteUrl) || activeAppServerRemoteUrls.has(session.remoteUrl));
+  const removedCodexSessions = codexSessions.filter((session) => !activeRemoteUrls.has(session.remoteUrl) && !activeAppServerRemoteUrls.has(session.remoteUrl));
+  const activeCmuxSessions: GadgetSessionRecord[] = [];
+  const removedCmuxSessions: GadgetSessionRecord[] = [];
+
+  for (const session of cmuxSessions) {
+    if (await isCmuxSessionActive(session)) {
+      activeCmuxSessions.push(session);
+    } else {
+      removedCmuxSessions.push(session);
+    }
+  }
+
+  const activeSessions = [...activeCodexSessions, ...activeCmuxSessions];
+  const removedSessions = [...removedCodexSessions, ...removedCmuxSessions];
 
   registry.projects = groupSessionsByProject(activeSessions);
   await writeSessionRegistry(registry);
@@ -590,8 +605,8 @@ function registrySessions(registry: { projects: Record<string, unknown[]> }): Ga
   return Object.values(registry.projects).flat().filter(isGadgetCodexSessionRecord);
 }
 
-function groupSessionsByProject(sessions: GadgetCodexSession[]): Record<string, GadgetCodexSession[]> {
-  const projects: Record<string, GadgetCodexSession[]> = {};
+function groupSessionsByProject<T extends GadgetSessionRecord>(sessions: T[]): Record<string, T[]> {
+  const projects: Record<string, T[]> = {};
   for (const session of sessions) {
     const project = session.cwd;
     projects[project] ??= [];
@@ -801,6 +816,17 @@ async function killProcess(pid: number): Promise<void> {
   }
   sendProcessSignal(pid, "SIGKILL");
   await waitForProcessExit(pid, APP_SERVER_SHUTDOWN_GRACE_MS);
+}
+
+async function isCmuxSessionActive(session: { workspace: string; surface: string }): Promise<boolean> {
+  const child = spawn("cmux", ["read-screen", "--workspace", session.workspace, "--surface", session.surface, "--lines", "1"], {
+    stdio: "ignore",
+    env: process.env,
+  });
+  return await new Promise<boolean>((resolve) => {
+    child.once("error", () => resolve(false));
+    child.once("exit", (code) => resolve(code === 0));
+  });
 }
 
 function sendProcessSignal(pid: number, signal: NodeJS.Signals): void {
