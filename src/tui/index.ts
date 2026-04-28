@@ -27,6 +27,7 @@ import { diffStateSignature, mergeDiffRefreshOptions } from "./diff-state";
 import {
   formatDiffRows,
   formatDiffViewportDiffRow,
+  formatDiffViewportFileHeader,
   formatDiffViewportRow,
   fullFileLineHighlights,
   lineBg,
@@ -1043,6 +1044,36 @@ class GadgetUi {
       const editingReviewComment = this.reviewMode && this.mode === "comment" && this.activeReviewTarget?.key === reviewKey;
       const editingScratchpadComment = this.scratchpadMode && this.mode === "comment" && this.activeScratchpadTarget?.key === scratchpadKey;
       const editingAnnotationComment = editingReviewComment || editingScratchpadComment;
+      if (line.kind === "file") {
+        const headerFile = this.fileForPath(line.filePath) ?? file;
+        const row = view.createTextRenderable({
+          id: `gadget-line-${index}-0`,
+          height: 1,
+          width: diffWidth,
+          fg: COLORS.text,
+          bg: COLORS.bg,
+          truncate: true,
+          content: formatDiffViewportFileHeader(headerFile, diffWidth, selected, hasLeftBorder, borderFg),
+          selectable: false,
+          onMouseDown: (event) => {
+            if (event.button !== MouseButton.LEFT) {
+              return;
+            }
+            if (this.shouldIgnoreDiffClick()) {
+              return;
+            }
+            this.selectedLineIndex = index;
+            this.syncSelectedFileToSelectedLine();
+            this.revealSelectedLine = true;
+            this.renderAll();
+          },
+        });
+        view.diffScroll.add(row);
+        this.lineIds.push(row.id);
+        this.lineRenderables.set(index, [row]);
+        renderedRows += 1;
+        return;
+      }
       formatDiffRows(line, diffContentWidth, this.syntaxLineChunks.get(line.id)).forEach((content, rowIndex) => {
         const row = view.createTextRenderable({
           id: `gadget-line-${index}-${rowIndex}`,
@@ -2254,6 +2285,9 @@ class GadgetUi {
   }
 
   private diffLineVisualHeight(line: DiffLineRef): number {
+    if (line.kind === "file") {
+      return 1;
+    }
     const lineHeight = formatDiffRows(line, this.diffContentWidth()).length;
     if (!this.isAnnotationMode()) {
       return lineHeight;

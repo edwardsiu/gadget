@@ -4,7 +4,7 @@ import {
   type TextChunk,
 } from "@opentui/core";
 import type { DiffFile, DiffLineRef } from "../types";
-import { appendStyledChunk } from "./text";
+import { appendStyledChunk, truncateToWidth } from "./text";
 import {
   COLORS,
   DIFF_LINE_NUMBER_WIDTH,
@@ -22,6 +22,15 @@ export type DiffVisualRow = {
 export type FullFileLineHighlight = "added" | "modified";
 
 export function formatDiffRows(line: DiffLineRef, width: number, syntaxChunks?: TextChunk[]): DiffVisualRow[] {
+  if (line.kind === "file") {
+    return [{
+      lineNumber: " ".repeat(DIFF_LINE_NUMBER_WIDTH),
+      sign: " ",
+      text: line.text,
+      syntaxChunks: null,
+    }];
+  }
+
   const usableWidth = Math.max(1, width);
   const contentWidth = Math.max(1, usableWidth - diffLinePrefixWidth());
   const textRows = wrapTextLineWithOffsets(line.text, contentWidth);
@@ -73,6 +82,49 @@ export function formatDiffViewportDiffRow(row: DiffVisualRow, width: number, con
   return new StyledText(chunks);
 }
 
+export function formatDiffViewportFileHeader(file: DiffFile, width: number, selected: boolean, hasLeftBorder: boolean, borderFg: string): StyledText {
+  const chunks: TextChunk[] = [];
+  if (width <= 1) {
+    appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: borderFg, bg: COLORS.bg });
+    return new StyledText(chunks);
+  }
+
+  const bg = selected ? COLORS.selected : COLORS.panel;
+  const statsWidth = fileHeaderStatsText(file).length;
+  const contentWidth = Math.max(0, width - 1 - (hasLeftBorder ? 1 : 0));
+  const prefix = "> ";
+  if (contentWidth === 0) {
+    if (hasLeftBorder) {
+      appendDiffVerticalBorder(chunks, borderFg);
+    }
+    appendDiffVerticalBorder(chunks, borderFg);
+    return new StyledText(chunks);
+  }
+  if (contentWidth < prefix.length + statsWidth + 2) {
+    const label = truncateToWidth(`${prefix}${file.filePath}`, contentWidth);
+    if (hasLeftBorder) {
+      appendDiffVerticalBorder(chunks, borderFg);
+    }
+    appendStyledChunk(chunks, label.padEnd(contentWidth), { fg: COLORS.fileName, bg });
+    appendDiffVerticalBorder(chunks, borderFg);
+    return new StyledText(chunks);
+  }
+
+  const pathWidth = Math.max(1, contentWidth - prefix.length - statsWidth - 2);
+  const filePath = truncateToWidth(file.filePath, pathWidth);
+  const paddingWidth = Math.max(1, contentWidth - prefix.length - filePath.length - statsWidth);
+
+  if (hasLeftBorder) {
+    appendDiffVerticalBorder(chunks, borderFg);
+  }
+  appendStyledChunk(chunks, prefix, { fg: COLORS.statInfo, bg });
+  appendStyledChunk(chunks, filePath, { fg: COLORS.fileName, bg });
+  appendStyledChunk(chunks, " ".repeat(paddingWidth), { fg: COLORS.text, bg });
+  appendStyledFileHeaderStats(chunks, file, bg);
+  appendDiffVerticalBorder(chunks, borderFg);
+  return new StyledText(chunks);
+}
+
 export function visibleLineIndexes(
   lines: DiffLineRef[],
   scrollTop: number,
@@ -108,6 +160,18 @@ export function visibleLineIndexes(
     indexes.push(index);
   }
   return indexes;
+}
+
+function appendStyledFileHeaderStats(chunks: TextChunk[], file: DiffFile, bg: string): void {
+  appendStyledChunk(chunks, "(", { fg: COLORS.muted, bg });
+  appendStyledChunk(chunks, `+${file.additions}`, { fg: COLORS.statAdd, bg });
+  appendStyledChunk(chunks, "/", { fg: COLORS.muted, bg });
+  appendStyledChunk(chunks, `-${file.removals}`, { fg: COLORS.statRemove, bg });
+  appendStyledChunk(chunks, ")", { fg: COLORS.muted, bg });
+}
+
+function fileHeaderStatsText(file: DiffFile): string {
+  return `(+${file.additions}/-${file.removals})`;
 }
 
 export function lineFg(line: DiffLineRef): string {
