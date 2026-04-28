@@ -52,6 +52,24 @@ if [ -z "$GADGET_CMUX" ]; then
   fi
 fi
 
+if [ "$GADGET_DIFF_VIEW_EXPLICIT" = "0" ] && [ -t 0 ]; then
+  DEFAULT_DIFF_VIEW=${GADGET_DIFF_VIEW:-file}
+  while :; do
+    printf "Diff view mode [file/continuous] (%s): " "$DEFAULT_DIFF_VIEW"
+    read -r reply
+    case "$reply" in
+      "") GADGET_DIFF_VIEW=$DEFAULT_DIFF_VIEW ;;
+      file|continuous) GADGET_DIFF_VIEW=$reply ;;
+      *)
+        echo "Please enter 'file' or 'continuous'."
+        continue
+        ;;
+    esac
+    GADGET_DIFF_VIEW_EXPLICIT=1
+    break
+  done
+fi
+
 case "$GADGET_CMUX" in
   1|true|TRUE|yes|YES|y|Y) GADGET_CMUX=1 ;;
   *) GADGET_CMUX=0 ;;
