@@ -19,6 +19,8 @@ It watches a working tree, renders live file diffs, lets you attach comments to 
 
 ## Install
 
+The installer bootstraps Bun if needed. Claude integration requires cmux.
+
 ```bash
 bash install.sh
 ```
