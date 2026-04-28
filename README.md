@@ -43,6 +43,9 @@ GADGET_INSTALL_DIR=/usr/local/bin sh install.sh
 If cmux is installed, the installer prompts whether to enable Claude integration. The setting is stored in `~/.gadget/config.toml`:
 
 ```toml
+[diff]
+view = "file" # or "continuous"
+
 [integrations]
 cmux = true
 ```

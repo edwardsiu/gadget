@@ -3,12 +3,20 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type GadgetConfig = {
+  diff: {
+    view: DiffViewConfig;
+  };
   integrations: {
     cmux: boolean;
   };
 };
 
+export type DiffViewConfig = "file" | "continuous";
+
 const DEFAULT_CONFIG: GadgetConfig = {
+  diff: {
+    view: "file",
+  },
   integrations: {
     cmux: false,
   },
@@ -31,6 +39,9 @@ export function gadgetConfigPath(): string {
 
 function parseGadgetConfig(value: string): GadgetConfig {
   const config: GadgetConfig = {
+    diff: {
+      view: DEFAULT_CONFIG.diff.view,
+    },
     integrations: {
       cmux: DEFAULT_CONFIG.integrations.cmux,
     },
@@ -49,13 +60,19 @@ function parseGadgetConfig(value: string): GadgetConfig {
       continue;
     }
 
-    if (section !== "integrations") {
+    if (section === "diff") {
+      const match = /^view\s*=\s*"(file|continuous)"\s*$/.exec(line);
+      if (match) {
+        config.diff.view = match[1] as DiffViewConfig;
+      }
       continue;
     }
 
-    const match = /^cmux\s*=\s*(true|false)\s*$/.exec(line);
-    if (match) {
-      config.integrations.cmux = match[1] === "true";
+    if (section === "integrations") {
+      const match = /^cmux\s*=\s*(true|false)\s*$/.exec(line);
+      if (match) {
+        config.integrations.cmux = match[1] === "true";
+      }
     }
   }
 
