@@ -34,7 +34,9 @@ export class CmuxAdapter implements AgentAdapter {
   }
 
   async sendPrompt(prompt: string): Promise<void> {
-    await runCmux(["send", "--workspace", this.session.workspace, "--surface", this.session.surface, prompt]);
+    const bufferName = `gadget-${this.session.token}`;
+    await runCmux(["set-buffer", "--name", bufferName, prompt]);
+    await runCmux(["paste-buffer", "--name", bufferName, "--workspace", this.session.workspace, "--surface", this.session.surface]);
     await runCmux(["send-key", "--workspace", this.session.workspace, "--surface", this.session.surface, "Enter"]);
     this.status = `sent to ${this.session.name}`;
   }
