@@ -84,7 +84,12 @@ export function formatDiffViewportDiffRow(row: DiffVisualRow, width: number, con
 
 export function formatDiffViewportFileHeaderRows(file: DiffFile, width: number, selected: boolean, hasLeadingBorder: boolean, hasLeftBorder: boolean, borderFg: string): StyledText[] {
   return [
-    ...(hasLeadingBorder ? [formatDiffViewportBottomBorder(width, hasLeftBorder, borderFg)] : []),
+    ...(hasLeadingBorder
+      ? [
+        formatDiffViewportBottomBorder(width, hasLeftBorder, borderFg),
+        formatDiffViewportRow("", width, { fg: COLORS.text, bg: COLORS.bg }, hasLeftBorder, borderFg),
+      ]
+      : []),
     formatDiffViewportFileHeader(file, width, selected, hasLeftBorder, borderFg),
     formatDiffViewportBottomBorder(width, hasLeftBorder, borderFg),
   ];
