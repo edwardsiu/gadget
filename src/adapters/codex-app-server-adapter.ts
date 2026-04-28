@@ -1,12 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { AgentAdapter, AgentComment, AgentSessionInfo } from "../types";
 import { formatCommentPrompt } from "../comments";
 import { readGitInfo } from "../git";
+import { isGadgetCodexSessionRecord, readSessionRegistry, writeSessionRegistry, type GadgetCodexSessionRecord } from "../session-registry";
 
 type Pending = {
   resolve: (value: any) => void;
@@ -19,19 +18,7 @@ type ServerNotificationMessage = {
   params?: any;
 };
 
-export type GadgetCodexSession = {
-  cwd: string;
-  remoteUrl: string;
-  threadId: string | null;
-  appServerPid: number | null;
-  model: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type GadgetSessionRegistry = {
-  projects: Record<string, GadgetCodexSession[]>;
-};
+export type GadgetCodexSession = GadgetCodexSessionRecord;
 
 export type LiveGadgetCodexSession = GadgetCodexSession & {
   preview: string;
@@ -555,7 +542,7 @@ class CodexAppServerClient {
 
 async function readSessions(cwd: string): Promise<GadgetCodexSession[]> {
   const registry = await readSessionRegistry();
-  return (registry.projects[cwd] ?? []).filter(isGadgetCodexSession);
+  return (registry.projects[cwd] ?? []).filter(isGadgetCodexSessionRecord);
 }
 
 async function readAllSessions(): Promise<GadgetCodexSession[]> {
@@ -586,16 +573,21 @@ async function removeSession(cwd: string, session: GadgetCodexSession): Promise<
 
 async function writeSessions(cwd: string, sessions: GadgetCodexSession[]): Promise<void> {
   const registry = await readSessionRegistry();
+  const otherSessions = (registry.projects[cwd] ?? []).filter((session) => !isGadgetCodexSessionRecord(session));
   if (sessions.length === 0) {
-    delete registry.projects[cwd];
+    if (otherSessions.length === 0) {
+      delete registry.projects[cwd];
+    } else {
+      registry.projects[cwd] = otherSessions;
+    }
   } else {
-    registry.projects[cwd] = sessions;
+    registry.projects[cwd] = [...otherSessions, ...sessions];
   }
   await writeSessionRegistry(registry);
 }
 
-function registrySessions(registry: GadgetSessionRegistry): GadgetCodexSession[] {
-  return Object.values(registry.projects).flat().filter(isGadgetCodexSession);
+function registrySessions(registry: { projects: Record<string, unknown[]> }): GadgetCodexSession[] {
+  return Object.values(registry.projects).flat().filter(isGadgetCodexSessionRecord);
 }
 
 function groupSessionsByProject(sessions: GadgetCodexSession[]): Record<string, GadgetCodexSession[]> {
@@ -606,58 +598,6 @@ function groupSessionsByProject(sessions: GadgetCodexSession[]): Record<string, 
     projects[project].push(session);
   }
   return projects;
-}
-
-async function readSessionRegistry(): Promise<GadgetSessionRegistry> {
-  try {
-    const value = JSON.parse(await readFile(sessionRegistryPath(), "utf8"));
-    if (!isGadgetSessionRegistry(value)) {
-      return { projects: {} };
-    }
-    return value;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { projects: {} };
-    }
-    throw error;
-  }
-}
-
-async function writeSessionRegistry(registry: GadgetSessionRegistry): Promise<void> {
-  const filePath = sessionRegistryPath();
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(registry, null, 2)}\n`);
-}
-
-function sessionRegistryPath(): string {
-  return join(homedir(), ".gadget", "sessions.json");
-}
-
-function isGadgetSessionRegistry(value: unknown): value is GadgetSessionRegistry {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const projects = (value as Record<string, unknown>).projects;
-  if (!projects || typeof projects !== "object" || Array.isArray(projects)) {
-    return false;
-  }
-  return Object.values(projects).every((projectSessions) => Array.isArray(projectSessions) && projectSessions.every(isGadgetCodexSession));
-}
-
-function isGadgetCodexSession(value: unknown): value is GadgetCodexSession {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.cwd === "string" &&
-    typeof candidate.remoteUrl === "string" &&
-    (typeof candidate.threadId === "string" || candidate.threadId === null) &&
-    (typeof candidate.appServerPid === "number" || candidate.appServerPid === null) &&
-    (typeof candidate.model === "string" || candidate.model === null) &&
-    typeof candidate.createdAt === "string" &&
-    typeof candidate.updatedAt === "string"
-  );
 }
 
 async function launchCodexCli(cwd: string, codexPath: string, session: GadgetCodexSession, appServer: AppServerRuntime, resumeSessionId?: string): Promise<void> {

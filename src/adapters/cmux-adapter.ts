@@ -1,25 +1,10 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import type { AgentAdapter, AgentComment, AgentSessionInfo } from "../types";
 import { formatCommentPrompt } from "../comments";
 import { readGadgetConfig } from "../config";
+import { isGadgetCmuxSessionRecord, readSessionRegistry, writeSessionRegistry, type GadgetCmuxSessionRecord } from "../session-registry";
 
-export type GadgetCmuxSession = {
-  token: string;
-  cwd: string;
-  workspace: string;
-  surface: string;
-  name: string;
-  command: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type GadgetCmuxSessionRegistry = {
-  projects: Record<string, GadgetCmuxSession[]>;
-};
+export type GadgetCmuxSession = GadgetCmuxSessionRecord;
 
 export class CmuxAdapter implements AgentAdapter {
   label = "cmux";
@@ -73,6 +58,8 @@ export async function startClaudeCmuxSession(cwd: string, claudeArgs: string[] =
 
   const now = new Date().toISOString();
   const session: GadgetCmuxSession = {
+    client: "claude",
+    transport: "cmux",
     token,
     cwd,
     workspace,
@@ -92,21 +79,23 @@ export async function startClaudeCmuxSession(cwd: string, claudeArgs: string[] =
 }
 
 export async function untrackCmuxSession(token: string): Promise<boolean> {
-  const registry = await readCmuxSessionRegistry();
+  const registry = await readSessionRegistry();
   let removed = false;
-  const nextProjects: Record<string, GadgetCmuxSession[]> = {};
+  const nextProjects = { ...registry.projects };
   for (const [cwd, sessions] of Object.entries(registry.projects)) {
     const remaining = sessions.filter((session) => {
-      const keep = session.token !== token;
+      const keep = !isGadgetCmuxSessionRecord(session) || session.token !== token;
       removed ||= !keep;
       return keep;
     });
     if (remaining.length > 0) {
       nextProjects[cwd] = remaining;
+    } else {
+      delete nextProjects[cwd];
     }
   }
   if (removed) {
-    await writeCmuxSessionRegistry({ projects: nextProjects });
+    await writeSessionRegistry({ projects: nextProjects });
   }
   return removed;
 }
@@ -174,8 +163,8 @@ async function runCmux(args: string[]): Promise<string> {
 }
 
 async function readCmuxSessions(cwd: string): Promise<GadgetCmuxSession[]> {
-  const registry = await readCmuxSessionRegistry();
-  return (registry.projects[cwd] ?? []).filter(isGadgetCmuxSession);
+  const registry = await readSessionRegistry();
+  return (registry.projects[cwd] ?? []).filter(isGadgetCmuxSessionRecord);
 }
 
 async function upsertCmuxSession(cwd: string, session: GadgetCmuxSession): Promise<void> {
@@ -198,38 +187,18 @@ async function removeCmuxSession(cwd: string, session: Partial<GadgetCmuxSession
 }
 
 async function writeCmuxSessions(cwd: string, sessions: GadgetCmuxSession[]): Promise<void> {
-  const registry = await readCmuxSessionRegistry();
+  const registry = await readSessionRegistry();
+  const otherSessions = (registry.projects[cwd] ?? []).filter((session) => !isGadgetCmuxSessionRecord(session));
   if (sessions.length === 0) {
-    delete registry.projects[cwd];
+    if (otherSessions.length === 0) {
+      delete registry.projects[cwd];
+    } else {
+      registry.projects[cwd] = otherSessions;
+    }
   } else {
-    registry.projects[cwd] = sessions;
+    registry.projects[cwd] = [...otherSessions, ...sessions];
   }
-  await writeCmuxSessionRegistry(registry);
-}
-
-async function readCmuxSessionRegistry(): Promise<GadgetCmuxSessionRegistry> {
-  try {
-    const value = JSON.parse(await readFile(cmuxSessionRegistryPath(), "utf8"));
-    if (!isGadgetCmuxSessionRegistry(value)) {
-      return { projects: {} };
-    }
-    return value;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { projects: {} };
-    }
-    throw error;
-  }
-}
-
-async function writeCmuxSessionRegistry(registry: GadgetCmuxSessionRegistry): Promise<void> {
-  const filePath = cmuxSessionRegistryPath();
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(registry, null, 2)}\n`);
-}
-
-function cmuxSessionRegistryPath(): string {
-  return join(homedir(), ".gadget", "cmux-sessions.json");
+  await writeSessionRegistry(registry);
 }
 
 function shellQuote(value: string): string {
@@ -237,29 +206,4 @@ function shellQuote(value: string): string {
     return value;
   }
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function isGadgetCmuxSessionRegistry(value: unknown): value is GadgetCmuxSessionRegistry {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const projects = (value as Record<string, unknown>).projects;
-  return Boolean(projects && typeof projects === "object" && !Array.isArray(projects));
-}
-
-function isGadgetCmuxSession(value: unknown): value is GadgetCmuxSession {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.token === "string" &&
-    typeof candidate.cwd === "string" &&
-    typeof candidate.workspace === "string" &&
-    typeof candidate.surface === "string" &&
-    typeof candidate.name === "string" &&
-    typeof candidate.command === "string" &&
-    typeof candidate.createdAt === "string" &&
-    typeof candidate.updatedAt === "string"
-  );
 }
