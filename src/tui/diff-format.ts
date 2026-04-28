@@ -82,14 +82,27 @@ export function formatDiffViewportDiffRow(row: DiffVisualRow, width: number, con
   return new StyledText(chunks);
 }
 
-export function formatDiffViewportFileHeader(file: DiffFile, width: number, selected: boolean, hasLeftBorder: boolean, borderFg: string): StyledText {
+export function formatDiffViewportFileHeaderRows(file: DiffFile, width: number, selected: boolean, hasLeftBorder: boolean, borderFg: string): StyledText[] {
+  return [
+    formatDiffViewportHorizontalRule(width, selected ? COLORS.selected : COLORS.diffHeaderBg, hasLeftBorder, borderFg, "top"),
+    formatDiffViewportHeaderPadding(width, selected ? COLORS.selected : COLORS.diffHeaderBg, hasLeftBorder, borderFg),
+    formatDiffViewportFileHeader(file, width, selected, hasLeftBorder, borderFg),
+    formatDiffViewportHorizontalRule(width, selected ? COLORS.selected : COLORS.diffHeaderBg, hasLeftBorder, borderFg, "bottom"),
+  ];
+}
+
+export function formatDiffViewportBottomBorder(width: number, hasLeftBorder: boolean, borderFg: string): StyledText {
+  return formatDiffViewportHorizontalRule(width, COLORS.bg, hasLeftBorder, borderFg, "bottom");
+}
+
+function formatDiffViewportFileHeader(file: DiffFile, width: number, selected: boolean, hasLeftBorder: boolean, borderFg: string): StyledText {
   const chunks: TextChunk[] = [];
   if (width <= 1) {
     appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: borderFg, bg: COLORS.bg });
     return new StyledText(chunks);
   }
 
-  const bg = selected ? COLORS.selected : COLORS.panel;
+  const bg = selected ? COLORS.selected : COLORS.diffHeaderBg;
   const statsWidth = fileHeaderStatsText(file).length;
   const contentWidth = Math.max(0, width - 1 - (hasLeftBorder ? 1 : 0));
   const prefix = "> ";
@@ -122,6 +135,38 @@ export function formatDiffViewportFileHeader(file: DiffFile, width: number, sele
   appendStyledChunk(chunks, " ".repeat(paddingWidth), { fg: COLORS.text, bg });
   appendStyledFileHeaderStats(chunks, file, bg);
   appendDiffVerticalBorder(chunks, borderFg);
+  return new StyledText(chunks);
+}
+
+function formatDiffViewportHeaderPadding(width: number, bg: string, hasLeftBorder: boolean, borderFg: string): StyledText {
+  const chunks: TextChunk[] = [];
+  if (width <= 1) {
+    appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: borderFg, bg: COLORS.bg });
+    return new StyledText(chunks);
+  }
+
+  if (hasLeftBorder) {
+    appendDiffVerticalBorder(chunks, borderFg);
+  }
+  const contentWidth = Math.max(0, width - 1 - (hasLeftBorder ? 1 : 0));
+  appendStyledChunk(chunks, " ".repeat(contentWidth), { fg: COLORS.text, bg });
+  appendDiffVerticalBorder(chunks, borderFg);
+  return new StyledText(chunks);
+}
+
+function formatDiffViewportHorizontalRule(width: number, bg: string, hasLeftBorder: boolean, borderFg: string, edge: "top" | "bottom"): StyledText {
+  const chunks: TextChunk[] = [];
+  if (width <= 1) {
+    appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: borderFg, bg: COLORS.bg });
+    return new StyledText(chunks);
+  }
+
+  if (hasLeftBorder) {
+    appendDiffVerticalBorder(chunks, borderFg);
+  }
+  const contentWidth = Math.max(0, width - 1 - (hasLeftBorder ? 1 : 0));
+  appendStyledChunk(chunks, NAV_BORDER.horizontal.repeat(contentWidth), { fg: borderFg, bg });
+  appendStyledChunk(chunks, edge === "top" ? NAV_BORDER.topRight : NAV_BORDER.bottomRight, { fg: borderFg, bg: COLORS.bg });
   return new StyledText(chunks);
 }
 

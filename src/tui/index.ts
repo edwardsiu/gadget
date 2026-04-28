@@ -26,8 +26,9 @@ import { commentCursorIndexAtPoint, createInlineCommentBox, formatInlineComment,
 import { diffStateSignature, mergeDiffRefreshOptions } from "./diff-state";
 import {
   formatDiffRows,
+  formatDiffViewportBottomBorder,
   formatDiffViewportDiffRow,
-  formatDiffViewportFileHeader,
+  formatDiffViewportFileHeaderRows,
   formatDiffViewportRow,
   fullFileLineHighlights,
   lineBg,
@@ -1046,32 +1047,37 @@ class GadgetUi {
       const editingAnnotationComment = editingReviewComment || editingScratchpadComment;
       if (line.kind === "file") {
         const headerFile = this.fileForPath(line.filePath) ?? file;
-        const row = view.createTextRenderable({
-          id: `gadget-line-${index}-0`,
-          height: 1,
-          width: diffWidth,
-          fg: COLORS.text,
-          bg: COLORS.bg,
-          truncate: true,
-          content: formatDiffViewportFileHeader(headerFile, diffWidth, selected, hasLeftBorder, borderFg),
-          selectable: false,
-          onMouseDown: (event) => {
-            if (event.button !== MouseButton.LEFT) {
-              return;
-            }
-            if (this.shouldIgnoreDiffClick()) {
-              return;
-            }
-            this.selectedLineIndex = index;
-            this.syncSelectedFileToSelectedLine();
-            this.revealSelectedLine = true;
-            this.renderAll();
-          },
+        const headerRows = formatDiffViewportFileHeaderRows(headerFile, diffWidth, selected, hasLeftBorder, borderFg);
+        const lineRows: TextRenderable[] = [];
+        headerRows.forEach((content, rowIndex) => {
+          const row = view.createTextRenderable({
+            id: `gadget-line-${index}-${rowIndex}`,
+            height: 1,
+            width: diffWidth,
+            fg: COLORS.text,
+            bg: COLORS.bg,
+            truncate: true,
+            content,
+            selectable: false,
+            onMouseDown: (event) => {
+              if (event.button !== MouseButton.LEFT) {
+                return;
+              }
+              if (this.shouldIgnoreDiffClick()) {
+                return;
+              }
+              this.selectedLineIndex = index;
+              this.syncSelectedFileToSelectedLine();
+              this.revealSelectedLine = true;
+              this.renderAll();
+            },
+          });
+          view.diffScroll.add(row);
+          this.lineIds.push(row.id);
+          lineRows.push(row);
+          renderedRows += 1;
         });
-        view.diffScroll.add(row);
-        this.lineIds.push(row.id);
-        this.lineRenderables.set(index, [row]);
-        renderedRows += 1;
+        this.lineRenderables.set(index, lineRows);
         return;
       }
       formatDiffRows(line, diffContentWidth, this.syntaxLineChunks.get(line.id)).forEach((content, rowIndex) => {
@@ -1171,6 +1177,22 @@ class GadgetUi {
         renderedRows += commentBox.height;
       }
     });
+
+    if (this.continuousDiffActive()) {
+      const bottomBorder = view.createTextRenderable({
+        id: "gadget-continuous-diff-bottom-border",
+        height: 1,
+        width: diffWidth,
+        fg: COLORS.text,
+        bg: COLORS.bg,
+        truncate: true,
+        content: formatDiffViewportBottomBorder(diffWidth, hasLeftBorder, borderFg),
+        selectable: false,
+      });
+      view.diffScroll.add(bottomBorder);
+      this.lineIds.push(bottomBorder.id);
+      renderedRows += 1;
+    }
 
     this.addDiffFillerRows(renderedRows, diffWidth, hasLeftBorder, borderFg);
 
@@ -2248,7 +2270,8 @@ class GadgetUi {
   }
 
   private diffVisualRowCount(): number {
-    return this.selectedLines().reduce((count, line) => count + this.diffLineVisualHeight(line), 0);
+    const lineRows = this.selectedLines().reduce((count, line) => count + this.diffLineVisualHeight(line), 0);
+    return lineRows + (this.continuousDiffActive() ? 1 : 0);
   }
 
   private diffLineVisualStart(lineIndex: number): number {
@@ -2286,7 +2309,7 @@ class GadgetUi {
 
   private diffLineVisualHeight(line: DiffLineRef): number {
     if (line.kind === "file") {
-      return 1;
+      return 4;
     }
     const lineHeight = formatDiffRows(line, this.diffContentWidth()).length;
     if (!this.isAnnotationMode()) {

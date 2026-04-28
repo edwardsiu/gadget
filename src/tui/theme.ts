@@ -14,6 +14,7 @@ export const COLORS = {
   statSelected: "#d9822b",
   statInfo: "#38d5e8",
   fileName: "#ffd75f",
+  diffHeaderBg: "#1f3040",
   addBg: "#173c2a",
   addFg: "#dbf6e5",
   modifiedBg: "#3d3317",
