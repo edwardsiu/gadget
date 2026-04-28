@@ -13,7 +13,7 @@ import type { RuntimeSession } from "../runtimes/types";
 const SESSION_MODAL_WIDTH = 72;
 const SESSION_MODAL_MIN_HEIGHT = 5;
 const SESSION_MODAL_MAX_CHOICE_ROWS = 10;
-type SessionModalRow = { label: string | null; value: string; selected: boolean; choice: boolean };
+type SessionModalRow = { label: string | null; value: string; description?: string; selected: boolean; choice: boolean };
 
 export class SessionModal {
   readonly renderable: TextRenderable;
@@ -123,9 +123,11 @@ function sessionRows(info: AgentSessionInfo): Array<{ label: string | null; valu
 
 function sessionChoiceRows(sessions: RuntimeSession[]): SessionModalRow[] {
   return sessions.map((session, index) => {
+    const preview = session.preview.trim();
     return {
       label: `[${quickSelectLabel(index)}]`,
       value: session.cwd,
+      ...(preview ? { description: preview } : {}),
       selected: false,
       choice: true,
     };
@@ -186,7 +188,7 @@ function appendSessionModalLine(chunks: TextChunk[], row: SessionModalRow | null
   let content = "";
   if (row) {
     content = row.choice
-      ? formatShortcutValue(row.label ?? "", row.value, contentWidth)
+      ? formatShortcutValue(row.label ?? "", row.value, row.description ?? "", contentWidth)
       : row.label
         ? formatLabeledValue(row.label, row.value, contentWidth)
         : truncateToWidth(row.value, contentWidth);
@@ -209,12 +211,23 @@ function formatLabeledValue(label: string, value: string, width: number): string
   return `${prefix}${truncateMiddle(value, width - prefix.length)}`;
 }
 
-function formatShortcutValue(label: string, value: string, width: number): string {
+function formatShortcutValue(label: string, value: string, description: string, width: number): string {
   const prefix = `${label} `;
   if (prefix.length >= width) {
     return truncateToWidth(`${prefix}${value}`, width);
   }
-  return `${prefix}${truncateToWidth(value, width - prefix.length)}`;
+
+  if (!description) {
+    return `${prefix}${truncateToWidth(value, width - prefix.length)}`;
+  }
+
+  const descriptionPrefix = "  ";
+  const remainingWidth = width - prefix.length;
+  const descriptionWidth = Math.min(description.length, Math.max(0, Math.floor(remainingWidth * 0.35)));
+  const valueWidth = Math.max(1, remainingWidth - descriptionPrefix.length - descriptionWidth);
+  const truncatedValue = truncateToWidth(value, valueWidth);
+  const truncatedDescription = truncateMiddle(description, descriptionWidth);
+  return `${prefix}${truncatedValue}${descriptionPrefix}${truncatedDescription}`;
 }
 
 function quickSelectLabel(index: number): string {
