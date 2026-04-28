@@ -1047,7 +1047,7 @@ class GadgetUi {
       const editingAnnotationComment = editingReviewComment || editingScratchpadComment;
       if (line.kind === "file") {
         const headerFile = this.fileForPath(line.filePath) ?? file;
-        const headerRows = formatDiffViewportFileHeaderRows(headerFile, diffWidth, selected, hasLeftBorder, borderFg);
+        const headerRows = formatDiffViewportFileHeaderRows(headerFile, diffWidth, selected, index > 0, hasLeftBorder, borderFg);
         const lineRows: TextRenderable[] = [];
         headerRows.forEach((content, rowIndex) => {
           const row = view.createTextRenderable({
@@ -2270,7 +2270,7 @@ class GadgetUi {
   }
 
   private diffVisualRowCount(): number {
-    const lineRows = this.selectedLines().reduce((count, line) => count + this.diffLineVisualHeight(line), 0);
+    const lineRows = this.selectedLines().reduce((count, line, index) => count + this.diffLineVisualHeight(line, index), 0);
     return lineRows + (this.continuousDiffActive() ? 1 : 0);
   }
 
@@ -2280,7 +2280,7 @@ class GadgetUi {
     for (let index = 0; index < lineIndex; index += 1) {
       const line = lines[index];
       if (line) {
-        row += this.diffLineVisualHeight(line);
+        row += this.diffLineVisualHeight(line, index);
       }
     }
     return row;
@@ -2299,7 +2299,7 @@ class GadgetUi {
       if (!line) {
         continue;
       }
-      row += this.diffLineVisualHeight(line);
+      row += this.diffLineVisualHeight(line, index);
       if (targetRow < row) {
         return index;
       }
@@ -2307,9 +2307,9 @@ class GadgetUi {
     return lines.length - 1;
   }
 
-  private diffLineVisualHeight(line: DiffLineRef): number {
+  private diffLineVisualHeight(line: DiffLineRef, lineIndex = this.selectedLineIndex): number {
     if (line.kind === "file") {
-      return 4;
+      return lineIndex > 0 ? 2 : 1;
     }
     const lineHeight = formatDiffRows(line, this.diffContentWidth()).length;
     if (!this.isAnnotationMode()) {

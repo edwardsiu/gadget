@@ -82,12 +82,10 @@ export function formatDiffViewportDiffRow(row: DiffVisualRow, width: number, con
   return new StyledText(chunks);
 }
 
-export function formatDiffViewportFileHeaderRows(file: DiffFile, width: number, selected: boolean, hasLeftBorder: boolean, borderFg: string): StyledText[] {
+export function formatDiffViewportFileHeaderRows(file: DiffFile, width: number, selected: boolean, hasLeadingBorder: boolean, hasLeftBorder: boolean, borderFg: string): StyledText[] {
   return [
-    formatDiffViewportHorizontalRule(width, selected ? COLORS.selected : COLORS.diffHeaderBg, hasLeftBorder, borderFg, "top"),
-    formatDiffViewportHeaderPadding(width, selected ? COLORS.selected : COLORS.diffHeaderBg, hasLeftBorder, borderFg),
+    ...(hasLeadingBorder ? [formatDiffViewportBottomBorder(width, hasLeftBorder, borderFg)] : []),
     formatDiffViewportFileHeader(file, width, selected, hasLeftBorder, borderFg),
-    formatDiffViewportHorizontalRule(width, selected ? COLORS.selected : COLORS.diffHeaderBg, hasLeftBorder, borderFg, "bottom"),
   ];
 }
 
@@ -134,22 +132,6 @@ function formatDiffViewportFileHeader(file: DiffFile, width: number, selected: b
   appendStyledChunk(chunks, filePath, { fg: COLORS.fileName, bg });
   appendStyledChunk(chunks, " ".repeat(paddingWidth), { fg: COLORS.text, bg });
   appendStyledFileHeaderStats(chunks, file, bg);
-  appendDiffVerticalBorder(chunks, borderFg);
-  return new StyledText(chunks);
-}
-
-function formatDiffViewportHeaderPadding(width: number, bg: string, hasLeftBorder: boolean, borderFg: string): StyledText {
-  const chunks: TextChunk[] = [];
-  if (width <= 1) {
-    appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: borderFg, bg: COLORS.bg });
-    return new StyledText(chunks);
-  }
-
-  if (hasLeftBorder) {
-    appendDiffVerticalBorder(chunks, borderFg);
-  }
-  const contentWidth = Math.max(0, width - 1 - (hasLeftBorder ? 1 : 0));
-  appendStyledChunk(chunks, " ".repeat(contentWidth), { fg: COLORS.text, bg });
   appendDiffVerticalBorder(chunks, borderFg);
   return new StyledText(chunks);
 }
