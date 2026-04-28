@@ -28,9 +28,11 @@ export type TextInputAction =
   | { type: "quit" }
   | { type: "cancel" }
   | { type: "backspace" }
+  | { type: "deleteBackwardWord" }
   | { type: "submit" }
   | { type: "newline" }
   | { type: "deleteComment" }
+  | { type: "move"; direction: "left" | "right" | "up" | "down"; unit: "character" | "word" | "lineBoundary" }
   | { type: "insert"; text: string };
 
 export type SearchInputAction =
@@ -197,6 +199,10 @@ export function textActionFromRaw(sequence: string): TextInputAction | null {
   if (isDeleteCommentSequence(sequence)) {
     return { type: "deleteComment" };
   }
+  const navigation = textNavigationActionFromRaw(sequence);
+  if (navigation) {
+    return navigation;
+  }
   switch (sequence) {
     case "\u001b":
       return { type: "cancel" };
@@ -216,7 +222,14 @@ export function textActionFromKey(key: KeyEvent): TextInputAction | null {
     return { type: "cancel" };
   }
   if (key.name === "backspace" || key.sequence === "\u007f") {
+    if (isWordModifierKey(key)) {
+      return { type: "deleteBackwardWord" };
+    }
     return { type: "backspace" };
+  }
+  const navigation = textNavigationActionFromKey(key);
+  if (navigation) {
+    return navigation;
   }
   if (key.shift && (key.name === "enter" || key.name === "return")) {
     return { type: "newline" };
@@ -459,6 +472,76 @@ function isDeleteCommentSequence(sequence: string): boolean {
 
 function isDeleteCommentKey(key: KeyEvent): boolean {
   return key.ctrl && (key.name === "x" || key.sequence === "x" || key.sequence === "X");
+}
+
+function textNavigationActionFromKey(key: KeyEvent): TextInputAction | null {
+  const direction = arrowDirection(key.name || key.sequence);
+  if (!direction) {
+    return null;
+  }
+  if (isLineBoundaryModifierKey(key) && (direction === "left" || direction === "right")) {
+    return { type: "move", direction, unit: "lineBoundary" };
+  }
+  if (isWordModifierKey(key) && (direction === "left" || direction === "right")) {
+    return { type: "move", direction, unit: "word" };
+  }
+  return { type: "move", direction, unit: "character" };
+}
+
+function textNavigationActionFromRaw(sequence: string): TextInputAction | null {
+  switch (sequence) {
+    case "\u001b[D":
+      return { type: "move", direction: "left", unit: "character" };
+    case "\u001b[C":
+      return { type: "move", direction: "right", unit: "character" };
+    case "\u001b[A":
+      return { type: "move", direction: "up", unit: "character" };
+    case "\u001b[B":
+      return { type: "move", direction: "down", unit: "character" };
+    case "\u001b[1;3D":
+    case "\u001b[1;9D":
+    case "\u001bb":
+      return { type: "move", direction: "left", unit: "word" };
+    case "\u001b[1;3C":
+    case "\u001b[1;9C":
+    case "\u001bf":
+      return { type: "move", direction: "right", unit: "word" };
+    case "\u001b[1;8D":
+    case "\u001b[1;10D":
+    case "\u001bOH":
+    case "\u001b[H":
+      return { type: "move", direction: "left", unit: "lineBoundary" };
+    case "\u001b[1;8C":
+    case "\u001b[1;10C":
+    case "\u001bOF":
+    case "\u001b[F":
+      return { type: "move", direction: "right", unit: "lineBoundary" };
+    default:
+      return null;
+  }
+}
+
+function arrowDirection(name: string): "left" | "right" | "up" | "down" | null {
+  switch (name) {
+    case "left":
+      return "left";
+    case "right":
+      return "right";
+    case "up":
+      return "up";
+    case "down":
+      return "down";
+    default:
+      return null;
+  }
+}
+
+function isWordModifierKey(key: KeyEvent): boolean {
+  return key.option || key.meta;
+}
+
+function isLineBoundaryModifierKey(key: KeyEvent): boolean {
+  return key.super || (key.ctrl && !key.option && !key.meta);
 }
 
 export function verticalScrollDirection(direction: "up" | "down" | "left" | "right" | undefined, shift: boolean): "up" | "down" | null {

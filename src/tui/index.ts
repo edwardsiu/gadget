@@ -3,6 +3,7 @@ import {
   pathToFiletype,
   MouseButton,
   treeSitterToTextChunks,
+  type MouseEvent,
   type TextChunk,
   type TextRenderable,
 } from "@opentui/core";
@@ -19,7 +20,7 @@ import {
   type ScratchpadDocument,
 } from "../scratchpad";
 import type { AgentAdapter, AgentComment, DiffFile, DiffLineRef, DiffState } from "../types";
-import { createInlineCommentBox, formatInlineComment, inlineCommentHeight } from "./comment-box";
+import { commentCursorIndexAtPoint, createInlineCommentBox, formatInlineComment, inlineCommentHeight, moveCommentCursorVertically } from "./comment-box";
 import { diffStateSignature, mergeDiffRefreshOptions } from "./diff-state";
 import {
   formatDiffRows,
@@ -171,6 +172,8 @@ class GadgetUi {
   private scratchpadComments = new Map<string, ScratchpadCommentDraft>();
   private activeScratchpadTarget: ScratchpadCommentTarget | null = null;
   private input = "";
+  private inputCursorIndex = 0;
+  private inputCursorPreferredColumn: number | null = null;
   private status = "starting";
   private watcher: ReturnType<typeof createDiffWatcher> | null = null;
   private lineIds: string[] = [];
@@ -386,16 +389,21 @@ class GadgetUi {
         }
         this.mode = "none";
         this.input = "";
+        this.resetInputCursor();
         this.setStatus("input cancelled");
         this.renderAll();
         return;
       case "backspace":
-        this.input = this.input.slice(0, -1);
+        this.deleteInputBeforeCursor();
+        this.renderCommentInputChange();
+        return;
+      case "deleteBackwardWord":
+        this.deleteInputRange(this.previousWordBoundary(this.inputCursorIndex), this.inputCursorIndex);
         this.renderCommentInputChange();
         return;
       case "newline":
         if (this.mode === "comment" || this.mode === "scratchpad-content") {
-          this.input += "\n";
+          this.insertInputText("\n");
           this.renderCommentInputChange();
         }
         return;
@@ -406,7 +414,13 @@ class GadgetUi {
         return;
       case "insert":
         if (this.mode === "comment" || this.mode === "scratchpad-content") {
-          this.input += action.text;
+          this.insertInputText(action.text);
+          this.renderCommentInputChange();
+        }
+        return;
+      case "move":
+        if (this.mode === "comment" || this.mode === "scratchpad-content") {
+          this.moveInputCursor(action.direction, action.unit);
           this.renderCommentInputChange();
         }
         return;
@@ -427,6 +441,7 @@ class GadgetUi {
         }
         this.mode = "none";
         this.input = "";
+        this.resetInputCursor();
         if (!value) {
           this.renderAll();
           return;
@@ -600,6 +615,8 @@ class GadgetUi {
         return;
       case "backspace":
         this.input = this.input.slice(0, -1);
+        this.inputCursorIndex = this.input.length;
+        this.inputCursorPreferredColumn = null;
         this.updateFileSearchMatches();
         this.renderFileSearchInputChange();
         return;
@@ -608,6 +625,8 @@ class GadgetUi {
         return;
       case "insert":
         this.input += action.text;
+        this.inputCursorIndex = this.input.length;
+        this.inputCursorPreferredColumn = null;
         this.updateFileSearchMatches();
         this.renderFileSearchInputChange();
         return;
@@ -969,20 +988,25 @@ class GadgetUi {
           submitLabel: "Save",
           showHints: editingAnnotationComment,
           showDeleteHint: editingAnnotationComment && savedAnnotationComment !== null,
-          ...(editingAnnotationComment ? { cursorVisible: this.commentCursorVisible } : {}),
+          ...(editingAnnotationComment ? { cursorVisible: this.commentCursorVisible, cursorIndex: this.inputCursorIndex } : {}),
         });
-        const openSavedComment = () => this.openCommentAtLine(index);
-        commentBox.box.onMouseDown = (event) => {
+        const handleCommentClick = (event: MouseEvent) => {
           if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
             return;
           }
-          openSavedComment();
+          const value = editingAnnotationComment ? this.input : savedAnnotationComment?.value ?? "";
+          const cursorIndex = this.commentCursorIndexFromMouse(event, value, commentBox.text);
+          if (editingAnnotationComment) {
+            this.setInputCursor(cursorIndex);
+            return;
+          }
+          this.openCommentAtLine(index, cursorIndex);
+        };
+        commentBox.box.onMouseDown = (event) => {
+          handleCommentClick(event);
         };
         commentBox.text.onMouseDown = (event) => {
-          if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
-            return;
-          }
-          openSavedComment();
+          handleCommentClick(event);
         };
         view.diffScroll.add(commentBox.box);
         this.lineIds.push(commentBox.box.id);
@@ -999,7 +1023,20 @@ class GadgetUi {
           width: commentWidth,
           submitLabel: this.activeCommentSubmitLabel(),
           cursorVisible: this.commentCursorVisible,
+          cursorIndex: this.inputCursorIndex,
         });
+        const handleCommentClick = (event: MouseEvent) => {
+          if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
+            return;
+          }
+          this.setInputCursor(this.commentCursorIndexFromMouse(event, this.input, commentBox.text));
+        };
+        commentBox.box.onMouseDown = (event) => {
+          handleCommentClick(event);
+        };
+        commentBox.text.onMouseDown = (event) => {
+          handleCommentClick(event);
+        };
         view.diffScroll.add(commentBox.box);
         this.lineIds.push(commentBox.box.id);
         this.inlineCommentText = commentBox.text;
@@ -1052,7 +1089,21 @@ class GadgetUi {
       width: diffWidth,
       submitLabel: "Start",
       showHints: true,
+      cursorVisible: this.commentCursorVisible,
+      cursorIndex: this.inputCursorIndex,
     });
+    const handleCommentClick = (event: MouseEvent) => {
+      if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
+        return;
+      }
+      this.setInputCursor(this.commentCursorIndexFromMouse(event, this.input, commentBox.text));
+    };
+    commentBox.box.onMouseDown = (event) => {
+      handleCommentClick(event);
+    };
+    commentBox.text.onMouseDown = (event) => {
+      handleCommentClick(event);
+    };
     view.diffScroll.add(commentBox.box);
     this.lineIds.push(commentBox.box.id);
     this.inlineCommentText = commentBox.text;
@@ -1163,7 +1214,7 @@ class GadgetUi {
 
     this.commentCursorVisible = true;
     const commentWidth = this.diffPaneWidth();
-    const commentHeight = inlineCommentHeight(this.input, commentWidth, true);
+    const commentHeight = inlineCommentHeight(this.input, commentWidth, true, this.inputCursorIndex);
     if (commentHeight !== this.inlineCommentHeightRows) {
       this.renderAll();
       return;
@@ -1184,6 +1235,7 @@ class GadgetUi {
       true,
       this.isEditingSavedReviewComment() || this.isEditingSavedScratchpadComment(),
       this.commentCursorVisible,
+      this.inputCursorIndex,
     );
     this.view?.requestRender();
   }
@@ -2191,9 +2243,9 @@ class GadgetUi {
     this.openCommentAtLine(this.selectedLineIndex);
   }
 
-  private openCommentAtLine(lineIndex: number): void {
+  private openCommentAtLine(lineIndex: number, cursorIndex?: number): void {
     if (this.scratchpadMode) {
-      this.openScratchpadCommentAtLine(lineIndex);
+      this.openScratchpadCommentAtLine(lineIndex, cursorIndex);
       return;
     }
 
@@ -2223,11 +2275,13 @@ class GadgetUi {
     } else {
       this.input = "";
     }
+    this.inputCursorIndex = cursorIndex ?? this.input.length;
+    this.inputCursorPreferredColumn = null;
     this.revealSelectedLine = true;
     this.renderAll();
   }
 
-  private openScratchpadCommentAtLine(lineIndex: number): void {
+  private openScratchpadCommentAtLine(lineIndex: number, cursorIndex?: number): void {
     const document = this.scratchpadDocument;
     const line = this.selectedLines()[lineIndex];
     const lineNumber = line?.newLine ?? lineIndex + 1;
@@ -2245,6 +2299,8 @@ class GadgetUi {
       lineNumber,
     };
     this.input = this.scratchpadComments.get(key)?.value ?? "";
+    this.inputCursorIndex = cursorIndex ?? this.input.length;
+    this.inputCursorPreferredColumn = null;
     this.revealSelectedLine = true;
     this.renderAll();
   }
@@ -2324,6 +2380,7 @@ class GadgetUi {
     this.closeOverlays();
     this.mode = "file-search";
     this.input = "";
+    this.resetInputCursor();
     this.fileSearchModalOpen = true;
     this.revealSelectedLine = true;
     this.pinSelectedLineToTop = false;
@@ -2346,6 +2403,7 @@ class GadgetUi {
     }
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.fileSearchModalOpen = false;
     this.renderAll();
   }
@@ -2417,6 +2475,108 @@ class GadgetUi {
       return "Save";
     }
     return this.adapter.label === "clipboard" ? "Copy" : "Submit";
+  }
+
+  private resetInputCursor(): void {
+    this.inputCursorIndex = 0;
+    this.inputCursorPreferredColumn = null;
+  }
+
+  private setInputCursor(index: number): void {
+    this.inputCursorIndex = clamp(index, 0, this.input.length);
+    this.inputCursorPreferredColumn = null;
+    this.commentCursorVisible = true;
+    this.renderCommentInputChange();
+  }
+
+  private insertInputText(text: string): void {
+    const cursor = clamp(this.inputCursorIndex, 0, this.input.length);
+    this.input = `${this.input.slice(0, cursor)}${text}${this.input.slice(cursor)}`;
+    this.inputCursorIndex = cursor + text.length;
+    this.inputCursorPreferredColumn = null;
+  }
+
+  private deleteInputBeforeCursor(): void {
+    if (this.inputCursorIndex <= 0) {
+      return;
+    }
+    this.deleteInputRange(this.inputCursorIndex - 1, this.inputCursorIndex);
+  }
+
+  private deleteInputRange(start: number, end: number): void {
+    const clampedStart = clamp(start, 0, this.input.length);
+    const clampedEnd = clamp(end, clampedStart, this.input.length);
+    if (clampedStart === clampedEnd) {
+      return;
+    }
+    this.input = `${this.input.slice(0, clampedStart)}${this.input.slice(clampedEnd)}`;
+    this.inputCursorIndex = clampedStart;
+    this.inputCursorPreferredColumn = null;
+  }
+
+  private moveInputCursor(direction: "left" | "right" | "up" | "down", unit: "character" | "word" | "lineBoundary"): void {
+    if (direction === "up" || direction === "down") {
+      const moved = moveCommentCursorVertically(this.input, this.commentContentWidth(), this.inputCursorIndex, direction === "up" ? -1 : 1, this.inputCursorPreferredColumn);
+      this.inputCursorIndex = moved.index;
+      this.inputCursorPreferredColumn = moved.column;
+      return;
+    }
+
+    this.inputCursorPreferredColumn = null;
+    if (unit === "word") {
+      this.inputCursorIndex = direction === "left" ? this.previousWordBoundary(this.inputCursorIndex) : this.nextWordBoundary(this.inputCursorIndex);
+      return;
+    }
+    if (unit === "lineBoundary") {
+      this.inputCursorIndex = direction === "left" ? this.currentLineStart(this.inputCursorIndex) : this.currentLineEnd(this.inputCursorIndex);
+      return;
+    }
+    this.inputCursorIndex = clamp(this.inputCursorIndex + (direction === "left" ? -1 : 1), 0, this.input.length);
+  }
+
+  private commentCursorIndexFromMouse(event: MouseEvent, value: string, text: TextRenderable): number {
+    const row = event.y - text.screenY - 1;
+    const column = event.x - text.screenX - 2;
+    return commentCursorIndexAtPoint(value, this.commentContentWidth(), row, column);
+  }
+
+  private commentContentWidth(): number {
+    return Math.max(1, this.diffPaneWidth() - 3);
+  }
+
+  private previousWordBoundary(index: number): number {
+    let cursor = clamp(index, 0, this.input.length);
+    while (cursor > 0 && /\s/.test(this.input[cursor - 1] ?? "")) {
+      cursor -= 1;
+    }
+    const wordMode = /\w/.test(this.input[cursor - 1] ?? "");
+    while (cursor > 0 && !/\s/.test(this.input[cursor - 1] ?? "") && /\w/.test(this.input[cursor - 1] ?? "") === wordMode) {
+      cursor -= 1;
+    }
+    return cursor;
+  }
+
+  private nextWordBoundary(index: number): number {
+    let cursor = clamp(index, 0, this.input.length);
+    while (cursor < this.input.length && /\s/.test(this.input[cursor] ?? "")) {
+      cursor += 1;
+    }
+    const wordMode = /\w/.test(this.input[cursor] ?? "");
+    while (cursor < this.input.length && !/\s/.test(this.input[cursor] ?? "") && /\w/.test(this.input[cursor] ?? "") === wordMode) {
+      cursor += 1;
+    }
+    return cursor;
+  }
+
+  private currentLineStart(index: number): number {
+    const cursor = clamp(index, 0, this.input.length);
+    return cursor === 0 ? 0 : this.input.lastIndexOf("\n", cursor - 1) + 1;
+  }
+
+  private currentLineEnd(index: number): number {
+    const cursor = clamp(index, 0, this.input.length);
+    const nextNewline = this.input.indexOf("\n", cursor);
+    return nextNewline < 0 ? this.input.length : nextNewline;
   }
 
   private renderFileSearchInputChange(): void {
@@ -2497,6 +2657,7 @@ class GadgetUi {
 
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.fileSearchModalOpen = false;
     this.selectedFileIndex = fileIndex;
     this.selectedLineIndex = 0;
@@ -2528,6 +2689,7 @@ class GadgetUi {
 
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.closeOverlays();
     this.selectedFileIndex = fileIndex;
     this.fileViewMode = "file";
@@ -2567,6 +2729,7 @@ class GadgetUi {
     this.activeScratchpadTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.activeReviewTarget = null;
     this.closeOverlays();
     this.setStatus("review mode");
@@ -2589,6 +2752,7 @@ class GadgetUi {
     this.scratchpadComments.clear();
     this.activeScratchpadTarget = null;
     this.input = "";
+    this.resetInputCursor();
     this.closeOverlays();
     this.setStatus("loading scratchpad");
 
@@ -2616,6 +2780,7 @@ class GadgetUi {
     this.activeReviewTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.setStatus(count > 0 ? `review canceled (${count} comments)` : "review canceled");
     this.renderAll();
   }
@@ -2628,6 +2793,7 @@ class GadgetUi {
     this.activeScratchpadTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.setStatus(count > 0 ? `scratchpad canceled (${count} comments)` : "scratchpad canceled");
     this.renderAll();
   }
@@ -2661,6 +2827,7 @@ class GadgetUi {
     this.activeReviewTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.renderAll();
   }
 
@@ -2685,6 +2852,7 @@ class GadgetUi {
     this.activeScratchpadTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.renderAll();
   }
 
@@ -2692,6 +2860,7 @@ class GadgetUi {
     this.activeReviewTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.setStatus("comment edit canceled");
     this.renderAll();
   }
@@ -2700,6 +2869,7 @@ class GadgetUi {
     this.activeScratchpadTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.setStatus("comment edit canceled");
     this.renderAll();
   }
@@ -2716,6 +2886,7 @@ class GadgetUi {
     this.activeReviewTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.setStatus("comment deleted");
     this.renderAll();
   }
@@ -2732,6 +2903,7 @@ class GadgetUi {
     this.activeScratchpadTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.setStatus("comment deleted");
     this.renderAll();
   }
@@ -2773,6 +2945,7 @@ class GadgetUi {
       this.activeReviewTarget = null;
       this.mode = "none";
       this.input = "";
+      this.resetInputCursor();
       this.setStatus(`${this.adapter.label === "clipboard" ? "copied" : "sent"} ${comments.length} review ${pluralize("comment", comments.length)}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2800,6 +2973,7 @@ class GadgetUi {
     if (!this.scratchpadDocument) {
       this.mode = "scratchpad-content";
       this.input = "";
+      this.resetInputCursor();
       this.setStatus("scratchpad content");
       this.renderAll();
       return;
@@ -2828,6 +3002,7 @@ class GadgetUi {
       this.activeScratchpadTarget = null;
       this.mode = "none";
       this.input = "";
+      this.resetInputCursor();
       this.setStatus(`${this.adapter.label === "clipboard" ? "copied" : "sent"} ${drafts.length} scratchpad ${pluralize("comment", drafts.length)}`);
     } catch (error) {
       this.setStatus(`scratchpad send failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2851,6 +3026,7 @@ class GadgetUi {
     this.activeScratchpadTarget = null;
     this.mode = "none";
     this.input = "";
+    this.resetInputCursor();
     this.fileViewMode = "diff";
     this.selectedLineIndex = 0;
     this.revealSelectedLine = true;
