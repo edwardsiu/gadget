@@ -2309,7 +2309,7 @@ class GadgetUi {
 
   private diffLineVisualHeight(line: DiffLineRef, lineIndex = this.selectedLineIndex): number {
     if (line.kind === "file") {
-      return lineIndex > 0 ? 2 : 1;
+      return lineIndex > 0 ? 3 : 2;
     }
     const lineHeight = formatDiffRows(line, this.diffContentWidth()).length;
     if (!this.isAnnotationMode()) {

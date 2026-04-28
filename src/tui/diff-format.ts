@@ -86,6 +86,7 @@ export function formatDiffViewportFileHeaderRows(file: DiffFile, width: number, 
   return [
     ...(hasLeadingBorder ? [formatDiffViewportBottomBorder(width, hasLeftBorder, borderFg)] : []),
     formatDiffViewportFileHeader(file, width, selected, hasLeftBorder, borderFg),
+    formatDiffViewportBottomBorder(width, hasLeftBorder, borderFg),
   ];
 }
 
