@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { constants, watch as watchFileSystem, type FSWatcher } from "node:fs";
+import { constants, existsSync, readFileSync, statSync, watch as watchFileSystem, type FSWatcher } from "node:fs";
 import { access, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { DiffFile, DiffLineRef, DiffState } from "./types";
 
 const DIFF_CONTEXT_LINES = 3;
@@ -516,6 +516,7 @@ export function createDiffWatcher(cwd: string, onChange: () => void): DiffWatche
   let closed = false;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let fsWatcher: FSWatcher | null = null;
+  const gitWatchers: FSWatcher[] = [];
 
   const scheduleChange = () => {
     if (closed) {
@@ -542,7 +543,11 @@ export function createDiffWatcher(cwd: string, onChange: () => void): DiffWatche
     fsWatcher = null;
   }
 
-  const timer = setInterval(scheduleChange, fsWatcher ? 30_000 : 1_000);
+  gitWatchers.push(...createGitMetadataWatchers(cwd, scheduleChange));
+
+  const timer = fsWatcher
+    ? null
+    : setInterval(scheduleChange, 1_000);
   return {
     async close() {
       closed = true;
@@ -550,9 +555,79 @@ export function createDiffWatcher(cwd: string, onChange: () => void): DiffWatche
         clearTimeout(debounceTimer);
       }
       fsWatcher?.close();
-      clearInterval(timer);
+      for (const watcher of gitWatchers) {
+        watcher.close();
+      }
+      if (timer) {
+        clearInterval(timer);
+      }
     },
   };
+}
+
+function createGitMetadataWatchers(cwd: string, onChange: () => void): FSWatcher[] {
+  const gitDir = resolveGitDir(cwd);
+  if (!gitDir) {
+    return [];
+  }
+
+  const paths = uniqueRefs([
+    join(cwd, ".git"),
+    join(gitDir, "HEAD"),
+    join(gitDir, "index"),
+    join(gitDir, "packed-refs"),
+    join(gitDir, "FETCH_HEAD"),
+    join(gitDir, "refs", "heads"),
+    join(gitDir, "refs", "remotes"),
+  ]);
+  const watchers: FSWatcher[] = [];
+  for (const path of paths) {
+    const watcher = watchPath(path, onChange);
+    if (watcher) {
+      watchers.push(watcher);
+    }
+  }
+  return watchers;
+}
+
+function resolveGitDir(cwd: string): string | null {
+  const dotGit = join(cwd, ".git");
+  if (!existsSync(dotGit)) {
+    return null;
+  }
+  try {
+    const stat = statSync(dotGit);
+    if (stat.isDirectory()) {
+      return dotGit;
+    }
+    if (!stat.isFile()) {
+      return null;
+    }
+    const match = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"));
+    const gitDir = match?.[1]?.trim();
+    if (!gitDir) {
+      return null;
+    }
+    return isAbsolute(gitDir) ? gitDir : resolve(dirname(dotGit), gitDir);
+  } catch {
+    return null;
+  }
+}
+
+function watchPath(path: string, onChange: () => void): FSWatcher | null {
+  if (!existsSync(path)) {
+    return null;
+  }
+  try {
+    const recursive = statSync(path).isDirectory();
+    return watchFileSystem(path, { recursive }, onChange);
+  } catch {
+    try {
+      return watchFileSystem(path, onChange);
+    } catch {
+      return null;
+    }
+  }
 }
 
 export function parseUnifiedDiff(diff: string): DiffFile[] {
