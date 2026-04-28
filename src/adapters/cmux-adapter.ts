@@ -64,21 +64,12 @@ export async function startClaudeCmuxSession(cwd: string, claudeArgs: string[] =
   }
 
   const token = `cmux_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const claudeCommand = ["claude", ...claudeArgs].map(shellQuote).join(" ");
-  const command = `${claudeCommand}; status=$?; gadget cmux-untrack ${shellQuote(token)}; exit $status`;
+  const workspace = process.env.CMUX_WORKSPACE_ID;
+  const surface = process.env.CMUX_SURFACE_ID;
+  if (!workspace || !surface) {
+    throw new Error("cmux integration requires running `gadget claude` inside a cmux terminal pane");
+  }
   const name = "gadget claude";
-  const output = await runCmux(["new-workspace", "--name", name, "--cwd", cwd, "--command", command]);
-  const workspace = parseRef(output, "workspace") ?? output.trim().split(/\s+/).find((part) => part.startsWith("workspace:"));
-  if (!workspace) {
-    throw new Error(`cmux did not return a workspace ref: ${output.trim()}`);
-  }
-
-  const surfacesOutput = await runCmux(["list-pane-surfaces", "--workspace", workspace]);
-  const surface = parseRef(surfacesOutput, "surface");
-  if (!surface) {
-    await removeCmuxSession(cwd, { workspace });
-    throw new Error(`cmux did not return a surface ref for ${workspace}`);
-  }
 
   const now = new Date().toISOString();
   const session: GadgetCmuxSession = {
@@ -87,13 +78,17 @@ export async function startClaudeCmuxSession(cwd: string, claudeArgs: string[] =
     workspace,
     surface,
     name,
-    command,
+    command: ["claude", ...claudeArgs].map(shellQuote).join(" "),
     createdAt: now,
     updatedAt: now,
   };
 
   await upsertCmuxSession(cwd, session);
-  console.log(`Started Claude in cmux ${workspace} ${surface}`);
+  try {
+    await runClaudeDirect(cwd, claudeArgs);
+  } finally {
+    await removeCmuxSession(cwd, session);
+  }
 }
 
 export async function untrackCmuxSession(token: string): Promise<boolean> {
@@ -235,10 +230,6 @@ async function writeCmuxSessionRegistry(registry: GadgetCmuxSessionRegistry): Pr
 
 function cmuxSessionRegistryPath(): string {
   return join(homedir(), ".gadget", "cmux-sessions.json");
-}
-
-function parseRef(output: string, kind: "workspace" | "surface"): string | null {
-  return output.match(new RegExp(`\\b${kind}:\\d+\\b`))?.[0] ?? null;
 }
 
 function shellQuote(value: string): string {
