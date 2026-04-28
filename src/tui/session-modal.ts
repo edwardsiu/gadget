@@ -12,6 +12,8 @@ import type { RuntimeSession } from "../runtimes/types";
 
 const SESSION_MODAL_WIDTH = 72;
 const SESSION_MODAL_MIN_HEIGHT = 5;
+const SESSION_MODAL_MAX_CHOICE_ROWS = 10;
+type SessionModalRow = { label: string | null; value: string; selected: boolean; choice: boolean };
 
 export class SessionModal {
   readonly renderable: TextRenderable;
@@ -81,9 +83,9 @@ export class SessionModal {
       return;
     }
 
-    const rows = options.choices
+    const rows: SessionModalRow[] = options.choices
       ? sessionChoiceRows(options.choices)
-      : sessionRows(options.info).map((row) => ({ ...row, selected: false }));
+      : sessionRows(options.info).map((row) => ({ ...row, selected: false, choice: false }));
     const width = this.width(options.rendererWidth);
     const height = this.height(rows.length, options.rendererHeight);
     this.visibleRowCount = Math.max(1, height - 2);
@@ -101,7 +103,8 @@ export class SessionModal {
 
   private height(rowCount: number, rendererHeight: number): number {
     const maxHeight = Math.max(SESSION_MODAL_MIN_HEIGHT, rendererHeight - FILE_MODAL_MARGIN_Y * 2);
-    return Math.min(maxHeight, Math.max(SESSION_MODAL_MIN_HEIGHT, rowCount + 2));
+    const visibleRows = Math.min(SESSION_MODAL_MAX_CHOICE_ROWS, Math.max(1, rowCount));
+    return Math.min(maxHeight, Math.max(SESSION_MODAL_MIN_HEIGHT, visibleRows + 2));
   }
 }
 
@@ -118,19 +121,19 @@ function sessionRows(info: AgentSessionInfo): Array<{ label: string | null; valu
   return rows;
 }
 
-function sessionChoiceRows(sessions: RuntimeSession[]): Array<{ label: string | null; value: string; selected: boolean }> {
+function sessionChoiceRows(sessions: RuntimeSession[]): SessionModalRow[] {
   return sessions.map((session, index) => {
-    const preview = session.preview.trim() || "(no preview yet)";
     return {
-      label: String(index + 1),
-      value: `${session.client} ${session.worktreeName} ${session.status} ${session.cwd} ${preview}`,
+      label: `[${quickSelectLabel(index)}]`,
+      value: session.cwd,
       selected: false,
+      choice: true,
     };
   });
 }
 
 function formatSessionModal(
-  rows: Array<{ label: string | null; value: string; selected: boolean }>,
+  rows: SessionModalRow[],
   width: number,
   height: number,
   scrollOffset: number,
@@ -166,7 +169,7 @@ function appendSessionModalTopBorder(chunks: TextChunk[], width: number, selecti
 }
 
 function appendSessionModalBottomBorder(chunks: TextChunk[], width: number, selecting: boolean): void {
-  const hint = selecting ? " Select [Enter]  Clipboard [Esc] " : " Close [Esc] ";
+  const hint = selecting ? " Select [Enter] | Universal [Esc] " : " Close [Esc] ";
   appendStyledChunk(chunks, NAV_BORDER.bottomLeft, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
   if (hint.length > width) {
     appendStyledChunk(chunks, `${NAV_BORDER.horizontal.repeat(width)}${NAV_BORDER.bottomRight}`, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
@@ -178,11 +181,15 @@ function appendSessionModalBottomBorder(chunks: TextChunk[], width: number, sele
   appendStyledChunk(chunks, NAV_BORDER.bottomRight, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
 }
 
-function appendSessionModalLine(chunks: TextChunk[], row: { label: string | null; value: string } | null, width: number, selected: boolean): void {
+function appendSessionModalLine(chunks: TextChunk[], row: SessionModalRow | null, width: number, selected: boolean): void {
   const contentWidth = Math.max(1, width - 2);
   let content = "";
   if (row) {
-    content = row.label ? formatLabeledValue(row.label, row.value, contentWidth) : truncateToWidth(row.value, contentWidth);
+    content = row.choice
+      ? formatShortcutValue(row.label ?? "", row.value, contentWidth)
+      : row.label
+        ? formatLabeledValue(row.label, row.value, contentWidth)
+        : truncateToWidth(row.value, contentWidth);
   }
   const paddingWidth = Math.max(0, width - content.length - 2);
   const bg = selected ? COLORS.selected : COLORS.panel;
@@ -200,6 +207,18 @@ function formatLabeledValue(label: string, value: string, width: number): string
     return truncateToWidth(`${prefix}${value}`, width);
   }
   return `${prefix}${truncateMiddle(value, width - prefix.length)}`;
+}
+
+function formatShortcutValue(label: string, value: string, width: number): string {
+  const prefix = `${label} `;
+  if (prefix.length >= width) {
+    return truncateToWidth(`${prefix}${value}`, width);
+  }
+  return `${prefix}${truncateToWidth(value, width - prefix.length)}`;
+}
+
+function quickSelectLabel(index: number): string {
+  return index === 9 ? "0" : String(index + 1);
 }
 
 function centeredOffset(outer: number, inner: number): number {

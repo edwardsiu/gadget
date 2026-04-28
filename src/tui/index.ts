@@ -93,6 +93,7 @@ import {
 type InputMode = "none" | "comment" | "file-search" | "scratchpad-content";
 type FileViewMode = "diff" | "file";
 type DiffBaseOverrideSource = "github" | "manual";
+const MAX_SESSION_CHOICE_ROWS = 10;
 type FileTreeNode = {
   children: Map<string, FileTreeNode>;
 };
@@ -2622,7 +2623,7 @@ class GadgetUi {
   }
 
   private sessionChoiceVisibleRows(): number {
-    return Math.max(1, Math.min(this.sessionChoices.length, (this.view?.height ?? 12) - 2 - 2 * FILE_MODAL_MARGIN_Y));
+    return Math.max(1, Math.min(this.sessionChoices.length, MAX_SESSION_CHOICE_ROWS, (this.view?.height ?? 12) - 2 - 2 * FILE_MODAL_MARGIN_Y));
   }
 
   private syncSessionChoiceScroll(): void {
@@ -3361,6 +3362,9 @@ function pluralize(word: string, count: number): string {
 }
 
 function quickSelectIndexFromSequence(sequence: string, itemCount: number): number | null {
+  if (sequence === "0") {
+    return itemCount >= 10 ? 9 : null;
+  }
   if (!/^[1-9]$/.test(sequence)) {
     return null;
   }
