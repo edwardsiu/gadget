@@ -19,13 +19,12 @@ It watches a working tree, renders live file diffs, lets you attach comments to 
 
 ## Install
 
-Gadget requires Bun. The Codex CLI is optional for connected Codex sessions. The Claude CLI and cmux are optional for connected Claude sessions.
+The installer uses Bun and installs it automatically if it is not already available. The Codex CLI is optional for connected Codex sessions. The Claude CLI and cmux are optional for connected Claude sessions.
 
 From this repo, install dependencies and link the `gadget` command:
 
 ```bash
-bun install
-sh install.sh
+bash install.sh
 ```
 
 The installer writes a local wrapper at `bin/gadget` and symlinks it to `~/.local/bin/gadget`. It refuses to overwrite an existing `gadget` command that points somewhere else. Make sure `~/.local/bin` is on your `PATH`:

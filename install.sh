@@ -24,9 +24,31 @@ if [ -z "$BUN_BIN" ]; then
 fi
 
 if [ -z "$BUN_BIN" ]; then
-  echo "Could not find bun. Install Bun first, or rerun with BUN=/path/to/bun." >&2
+  if ! command -v curl >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
+    echo "Could not find bun, curl, or bash." >&2
+    echo "Install Bun first, install curl and bash, or rerun with BUN=/path/to/bun." >&2
+    exit 1
+  fi
+
+  echo "Could not find bun. Installing Bun..."
+  BUN_INSTALL_SCRIPT=$(mktemp)
+  trap 'rm -f "$BUN_INSTALL_SCRIPT"' EXIT HUP INT TERM
+  curl -fsSL https://bun.sh/install -o "$BUN_INSTALL_SCRIPT"
+  bash "$BUN_INSTALL_SCRIPT"
+
+  BUN_BIN=$(command -v bun || true)
+  if [ -z "$BUN_BIN" ] && [ -x "$HOME/.bun/bin/bun" ]; then
+    BUN_BIN="$HOME/.bun/bin/bun"
+  fi
+fi
+
+if [ -z "$BUN_BIN" ]; then
+  echo "Bun was installed, but the bun executable could not be found." >&2
+  echo "Restart your shell, add ~/.bun/bin to PATH, or rerun with BUN=/path/to/bun." >&2
   exit 1
 fi
+
+"$BUN_BIN" install --cwd "$REPO_ROOT"
 
 mkdir -p "$REPO_ROOT/bin" "$INSTALL_DIR"
 
