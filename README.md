@@ -2,7 +2,7 @@
 
 Gadget is a terminal diff reviewer for coding-agent sessions.
 
-It watches a working tree, renders live file diffs, lets you attach comments to diff lines, and can either copy comments to your clipboard or connect them to a live Codex thread.
+It watches a working tree, renders live file diffs, lets you attach comments to diff lines, and can either copy comments to your clipboard or connect them to a live Codex or Claude session.
 
 ## Quick Demonstration
 
@@ -14,11 +14,12 @@ It watches a working tree, renders live file diffs, lets you attach comments to 
 - Inline comments on specific diff lines.
 - Clipboard review mode for copying comments into any agent or chat.
 - Connected Codex mode for sending review comments back to a live session.
+- Optional cmux-backed Claude mode for sending review comments to the current Claude pane.
 - Full-file view, file search, diff-base selection, and keyboard-first navigation.
 
 ## Install
 
-Gadget requires Bun. The Codex CLI is optional for connected Codex sessions.
+Gadget requires Bun. The Codex CLI is optional for connected Codex sessions. The Claude CLI and cmux are optional for connected Claude sessions.
 
 From this repo, install dependencies and link the `gadget` command:
 
@@ -37,6 +38,19 @@ To install somewhere else:
 
 ```bash
 GADGET_INSTALL_DIR=/usr/local/bin sh install.sh
+```
+
+If cmux is installed, the installer prompts whether to enable Claude integration. The setting is stored in `~/.gadget/config.toml`:
+
+```toml
+[integrations]
+cmux = true
+```
+
+You can also set it non-interactively:
+
+```bash
+GADGET_CMUX=1 sh install.sh
 ```
 
 Verify the install:
@@ -69,9 +83,14 @@ gadget some/file.txt:50
 # Start Codex with Gadget app-server integration.
 gadget codex
 
+# Start Claude in the current cmux pane and let Gadget connect review comments to it.
+gadget claude
+
 # Open the diff viewer in clipboard mode.
 gadget view
 ```
+
+`gadget claude` uses cmux only when `[integrations].cmux` is enabled and the command is run inside a cmux terminal pane. Review comments are pasted into that Claude pane as one multiline message. If cmux integration is disabled, `gadget claude` runs the Claude CLI normally.
 
 ## Keybindings
 
