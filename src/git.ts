@@ -50,6 +50,10 @@ export async function runGit(cwd: string, args: string[]): Promise<string> {
   return await runCommand(cwd, "git", args);
 }
 
+async function runReadOnlyGit(cwd: string, args: string[]): Promise<string> {
+  return await runCommand(cwd, "git", ["--no-optional-locks", ...args]);
+}
+
 async function runCommand(cwd: string, command: string, args: string[], options: { timeoutMs?: number } = {}): Promise<string> {
   const proc = Bun.spawn([command, ...args], {
     cwd,
@@ -90,8 +94,16 @@ export async function tryGit(cwd: string, args: string[]): Promise<string | null
   }
 }
 
+async function tryReadOnlyGit(cwd: string, args: string[]): Promise<string | null> {
+  try {
+    return await runReadOnlyGit(cwd, args);
+  } catch {
+    return null;
+  }
+}
+
 export async function assertGitRepo(cwd: string): Promise<void> {
-  await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+  await runReadOnlyGit(cwd, ["rev-parse", "--show-toplevel"]);
 }
 
 export async function readDiffState(cwd: string, options: ReadDiffStateOptions = {}): Promise<DiffState> {
@@ -99,7 +111,7 @@ export async function readDiffState(cwd: string, options: ReadDiffStateOptions =
     resolveDiffBase(cwd, options.baseRef),
     options.worktree ? Promise.resolve(options.worktree) : readWorktreeInfo(cwd),
   ]);
-  const diff = await runGit(cwd, ["diff", baseCandidate.mergeBase, "--no-color", "--no-ext-diff", `--unified=${DIFF_CONTEXT_LINES}`, "--"]);
+  const diff = await runReadOnlyGit(cwd, ["diff", baseCandidate.mergeBase, "--no-color", "--no-ext-diff", `--unified=${DIFF_CONTEXT_LINES}`, "--"]);
   const files = parseUnifiedDiff(diff);
   if (options.includeUntracked !== false) {
     files.push(...(await readUntrackedDiffs(cwd)));
@@ -118,22 +130,22 @@ export async function readDiffState(cwd: string, options: ReadDiffStateOptions =
 }
 
 export async function listSearchableFiles(cwd: string): Promise<string[]> {
-  const output = await runGit(cwd, ["ls-files", "-co", "--exclude-standard", "-z"]);
+  const output = await runReadOnlyGit(cwd, ["ls-files", "-co", "--exclude-standard", "-z"]);
   return [...new Set(output.split("\0").filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
 export async function readCurrentBranch(cwd: string): Promise<string> {
-  const branch = (await tryGit(cwd, ["branch", "--show-current"]))?.trim();
+  const branch = (await tryReadOnlyGit(cwd, ["branch", "--show-current"]))?.trim();
   if (branch) {
     return branch;
   }
 
-  const shortSha = (await tryGit(cwd, ["rev-parse", "--short", "HEAD"]))?.trim();
+  const shortSha = (await tryReadOnlyGit(cwd, ["rev-parse", "--short", "HEAD"]))?.trim();
   return shortSha ? `detached:${shortSha}` : "HEAD";
 }
 
 export async function readWorktreeInfo(cwd: string): Promise<WorktreeInfo> {
-  const worktreePath = (await runGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  const worktreePath = (await runReadOnlyGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
   const worktrees = await listWorktrees(worktreePath);
   const current = worktrees.find((worktree) => worktree.path === worktreePath);
   const branchName = current?.branchName ?? await readCurrentBranch(worktreePath);
@@ -186,7 +198,7 @@ export async function resolveWorktreeTarget(cwd: string, worktreeName?: string):
 }
 
 export async function listWorktrees(cwd: string): Promise<ListedWorktree[]> {
-  const output = await runGit(cwd, ["worktree", "list", "--porcelain"]);
+  const output = await runReadOnlyGit(cwd, ["worktree", "list", "--porcelain"]);
   const worktrees: ListedWorktree[] = [];
   let current: ListedWorktree | null = null;
 
@@ -243,7 +255,7 @@ export async function listDiffBaseCandidates(cwd: string, options: DiffBaseCandi
   const candidates: DiffBaseCandidate[] = [];
   const seenMergeBases = new Set<string>();
   for (const ref of refs) {
-    const mergeBase = (await tryGit(cwd, ["merge-base", "HEAD", ref.ref]))?.trim();
+    const mergeBase = (await tryReadOnlyGit(cwd, ["merge-base", "HEAD", ref.ref]))?.trim();
     if (!mergeBase || seenMergeBases.has(mergeBase)) {
       continue;
     }
@@ -258,7 +270,7 @@ export async function listDiffBaseCandidates(cwd: string, options: DiffBaseCandi
 
 async function resolveDiffBase(cwd: string, baseRef?: string): Promise<DiffBaseCandidate> {
   if (baseRef) {
-    const mergeBase = (await tryGit(cwd, ["merge-base", "HEAD", baseRef]))?.trim();
+    const mergeBase = (await tryReadOnlyGit(cwd, ["merge-base", "HEAD", baseRef]))?.trim();
     if (mergeBase) {
       return {
         ref: baseRef,
@@ -313,7 +325,7 @@ async function configuredDiffBaseRefs(cwd: string, currentBranch: string): Promi
 
   const keys = ["vscode-merge-base", "gh-merge-base", "merge-base"];
   const values = await Promise.all(keys.map(async (key) => {
-    const value = (await tryGit(cwd, ["config", "--get", `branch.${currentBranch}.${key}`]))?.trim();
+    const value = (await tryReadOnlyGit(cwd, ["config", "--get", `branch.${currentBranch}.${key}`]))?.trim();
     return value ? { key, value } : null;
   }));
 
@@ -326,7 +338,7 @@ async function configuredDiffBaseRefs(cwd: string, currentBranch: string): Promi
 }
 
 async function upstreamDiffBaseRefs(cwd: string, currentBranch: string): Promise<DiffBaseRef[]> {
-  const upstream = (await tryGit(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]))?.trim();
+  const upstream = (await tryReadOnlyGit(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]))?.trim();
   if (!upstream || remoteBranchName(upstream) === currentBranch) {
     return [];
   }
@@ -401,12 +413,12 @@ function remoteBranchName(ref: string): string {
 }
 
 async function findOriginDefaultBranch(cwd: string): Promise<string | null> {
-  const symbolicRef = (await tryGit(cwd, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim();
+  const symbolicRef = (await tryReadOnlyGit(cwd, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim();
   if (symbolicRef) {
     return symbolicRef;
   }
 
-  const remoteHead = (await tryGit(cwd, ["remote", "show", "origin"]))?.match(/HEAD branch: (.+)/)?.[1]?.trim();
+  const remoteHead = (await tryReadOnlyGit(cwd, ["remote", "show", "origin"]))?.match(/HEAD branch: (.+)/)?.[1]?.trim();
   return remoteHead ? `origin/${remoteHead}` : null;
 }
 
@@ -462,7 +474,7 @@ async function nextAvailableGeneratedWorktreeTarget(cwd: string, repositoryRoot:
 }
 
 async function branchExists(cwd: string, branchName: string): Promise<boolean> {
-  return (await tryGit(cwd, ["rev-parse", "--verify", `refs/heads/${branchName}`])) !== null;
+  return (await tryReadOnlyGit(cwd, ["rev-parse", "--verify", `refs/heads/${branchName}`])) !== null;
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -719,7 +731,7 @@ function parseDiffGitPath(raw: string): string {
 }
 
 async function readUntrackedDiffs(cwd: string): Promise<DiffFile[]> {
-  const status = await runGit(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  const status = await runReadOnlyGit(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   const entries = status.split("\0").filter(Boolean);
   const files: DiffFile[] = [];
 
