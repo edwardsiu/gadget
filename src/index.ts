@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { createInterface } from "node:readline/promises";
 import { resolve } from "node:path";
 import { Command, InvalidArgumentError } from "@commander-js/extra-typings";
 import { ClipboardAdapter } from "./adapters/clipboard-adapter";
@@ -16,7 +15,8 @@ type CommandTarget = {
 type DiffMode = "auto" | "clipboard";
 type DiffRunTarget =
   | { kind: "clipboard"; cwd: string; worktree: WorktreeInfo }
-  | { kind: "session"; cwd: string; session: RuntimeSession; worktree?: WorktreeInfo };
+  | { kind: "session"; cwd: string; session: RuntimeSession; worktree?: WorktreeInfo }
+  | { kind: "session-choice"; cwd: string; sessions: RuntimeSession[]; worktree: WorktreeInfo };
 
 const program = new Command();
 
@@ -143,8 +143,14 @@ async function openDiffViewer(options: { mode: DiffMode; worktree: string | unde
 
   await runGadgetUi({
     cwd: runTarget.cwd,
-    adapter: createAdapterForSession(runTarget.session),
+    adapter: runTarget.kind === "session" ? createAdapterForSession(runTarget.session) : new ClipboardAdapter(),
     ...(runTarget.worktree ? { worktree: runTarget.worktree } : {}),
+    ...(runTarget.kind === "session-choice"
+      ? {
+        sessionChoices: runTarget.sessions,
+        createAdapterForSession,
+      }
+      : {}),
     ...(options.initialFile ? { initialFile: options.initialFile } : {}),
   });
 }
@@ -163,48 +169,21 @@ async function resolveDiffRunTarget(target: CommandTarget, mode: DiffMode): Prom
     return { kind: "clipboard", cwd: target.worktree.cwd, worktree: target.worktree };
   }
 
-  const session = await selectRuntimeSession(target.worktree, target.selectedWorktreeName);
-  if (!session) {
+  const sessions = await listRuntimeSessions(target.worktree, target.selectedWorktreeName);
+  if (sessions.length === 0) {
     return { kind: "clipboard", cwd: target.worktree.cwd, worktree: target.worktree };
   }
+  if (sessions.length > 1) {
+    return { kind: "session-choice", cwd: target.worktree.cwd, sessions, worktree: target.worktree };
+  }
 
+  const session = sessions[0]!;
   return {
     kind: "session",
     cwd: session.cwd,
     session,
     ...(session.cwd === target.worktree.cwd ? { worktree: target.worktree } : {}),
   };
-}
-
-async function selectRuntimeSession(target: WorktreeInfo, worktreeName: string | undefined): Promise<RuntimeSession | null> {
-  const sessions = await listRuntimeSessions(target, worktreeName);
-
-  if (sessions.length === 0) {
-    return null;
-  }
-  if (sessions.length === 1) {
-    return sessions[0]!;
-  }
-
-  console.log("Multiple Gadget sessions are active:");
-  console.log(`Project: ${target.repositoryRoot}`);
-  sessions.forEach((session, index) => {
-    const preview = session.preview.trim() || "(no preview yet)";
-    console.log(`${index + 1}. ${session.client.padEnd(6)} ${session.worktreeName.padEnd(14)} ${session.status.padEnd(14)} ${session.cwd} ${preview.slice(0, 80)}`);
-  });
-
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    while (true) {
-      const answer = (await rl.question(`Select session [1-${sessions.length}]: `)).trim();
-      const index = Number(answer);
-      if (Number.isInteger(index) && index >= 1 && index <= sessions.length) {
-        return sessions[index - 1]!;
-      }
-    }
-  } finally {
-    rl.close();
-  }
 }
 
 async function listRuntimeSessions(target: WorktreeInfo, worktreeName: string | undefined): Promise<RuntimeSession[]> {

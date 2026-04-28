@@ -9,6 +9,7 @@ import {
 } from "@opentui/core";
 import type { KeyEvent } from "@opentui/core";
 import type { DiffBaseCandidate } from "../git";
+import type { RuntimeSession } from "../runtimes/types";
 import type { AgentSessionInfo, DiffFile } from "../types";
 import { DiffBaseModal } from "./diff-base-modal";
 import { type FuzzyFileMatch, FileSearchModal } from "./file-search-modal";
@@ -34,6 +35,8 @@ export type GadgetRendererCallbacks = {
   onFileSearchScroll: (delta: number) => void;
   onSelectDiffBaseCandidate: (index: number) => void;
   onDiffBaseScroll: (delta: number) => void;
+  onSelectSessionChoice: (index: number) => void;
+  onSessionChoiceScroll: (delta: number) => void;
 };
 
 export class GadgetRenderer {
@@ -179,7 +182,10 @@ export class GadgetRenderer {
       onScroll: callbacks.onDiffBaseScroll,
     });
     this.helpModal = new HelpModal(renderer);
-    this.sessionModal = new SessionModal(renderer);
+    this.sessionModal = new SessionModal(renderer, {
+      onSelectSession: callbacks.onSelectSessionChoice,
+      onScrollSessions: callbacks.onSessionChoiceScroll,
+    });
 
     root.add(this.fileTreeSidebar.renderable);
     root.add(this.navText);
@@ -364,10 +370,21 @@ export class GadgetRenderer {
     });
   }
 
-  renderSessionModal(open: boolean, info: AgentSessionInfo): void {
+  renderSessionModal(
+    open: boolean,
+    info: AgentSessionInfo,
+    choices?: { sessions: RuntimeSession[]; selectedIndex: number; scrollOffset: number },
+  ): void {
     this.sessionModal.render({
       open,
       info,
+      ...(choices
+        ? {
+          choices: choices.sessions,
+          selectedChoiceIndex: choices.selectedIndex,
+          scrollOffset: choices.scrollOffset,
+        }
+        : {}),
       rendererWidth: this.width,
       rendererHeight: this.height,
     });

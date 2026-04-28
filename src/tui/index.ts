@@ -11,6 +11,7 @@ import type { KeyEvent } from "@opentui/core";
 import { basename } from "node:path";
 import { createComment, formatReviewPrompt } from "../comments";
 import { createDiffWatcher, listDiffBaseCandidates, listSearchableFiles, readDiffState, type DiffBaseCandidate, type ReadDiffStateOptions, type WorktreeInfo } from "../git";
+import type { RuntimeAdapterFactory, RuntimeSession } from "../runtimes/types";
 import {
   createScratchpadDocument,
   formatScratchpadPrompt,
@@ -84,6 +85,7 @@ import {
   INPUT_LINES,
   NAV_CARD_HEIGHT,
   FILE_SEARCH_MAX_MATCHES,
+  FILE_MODAL_MARGIN_Y,
   REVIEW_BORDER_FG,
   SYNTAX_HIGHLIGHT_OVERSCAN_ROWS,
 } from "./theme";
@@ -128,8 +130,10 @@ export async function runGadgetUi(options: {
   adapter: AgentAdapter;
   worktree?: WorktreeInfo;
   initialFile?: InitialFileTarget;
+  sessionChoices?: RuntimeSession[];
+  createAdapterForSession?: RuntimeAdapterFactory;
 }): Promise<void> {
-  const app = new GadgetUi(options.cwd, options.adapter, options.worktree, options.initialFile);
+  const app = new GadgetUi(options.cwd, options.adapter, options.worktree, options.initialFile, options.sessionChoices ?? [], options.createAdapterForSession);
   await app.start();
   await new Promise<void>(() => undefined);
 }
@@ -157,6 +161,8 @@ class GadgetUi {
   private diffBaseModalOpen = false;
   private helpModalOpen = false;
   private sessionModalOpen = false;
+  private sessionChoiceSelectedIndex = 0;
+  private sessionChoiceScrollOffset = 0;
   private fileModalScrollOffset = 0;
   private fileSearchScrollOffset = 0;
   private fileSearchSelectedIndex = 0;
@@ -217,10 +223,12 @@ class GadgetUi {
   private initialWorktreeConsumed = false;
 
   constructor(
-    private readonly cwd: string,
-    private readonly adapter: AgentAdapter,
+    private cwd: string,
+    private adapter: AgentAdapter,
     private readonly initialWorktree?: WorktreeInfo,
     private readonly initialFile?: InitialFileTarget,
+    private sessionChoices: RuntimeSession[] = [],
+    private readonly createAdapterForSession?: RuntimeAdapterFactory,
   ) {
     this.state = {
       cwd: initialWorktree?.cwd ?? cwd,
@@ -274,11 +282,19 @@ class GadgetUi {
         void this.applySelectedDiffBase();
       },
       onDiffBaseScroll: (delta) => this.scrollDiffBaseModal(delta),
+      onSelectSessionChoice: (index) => {
+        this.sessionChoiceSelectedIndex = index;
+        void this.connectSelectedSessionChoice();
+      },
+      onSessionChoiceScroll: (delta) => this.scrollSessionChoices(delta),
     });
     this.bindInput();
     this.startCommentCursorTimer();
     this.renderAll();
-    const connectPromise = this.connectAdapter();
+    if (this.sessionChoices.length > 0) {
+      this.openSessionChoiceModal();
+    }
+    const connectPromise = this.sessionChoices.length > 0 ? Promise.resolve() : this.connectAdapter();
     const trackedDiffPromise = this.refreshDiffAndRender({ includeUntracked: false });
     void this.refreshSearchableFileCache({ render: false, updateStatus: false });
 
@@ -750,10 +766,30 @@ class GadgetUi {
   }
 
   private handleSessionModalSequence(sequence: string): void {
+    if (this.hasSessionChoices()) {
+      const quickSelectIndex = quickSelectIndexFromSequence(sequence, this.sessionChoices.length);
+      if (quickSelectIndex !== null) {
+        this.sessionChoiceSelectedIndex = quickSelectIndex;
+        void this.connectSelectedSessionChoice();
+        return;
+      }
+      void this.applySessionChoiceAction(diffBaseActionFromRaw(sequence));
+      return;
+    }
     this.applySessionModalAction(simpleModalActionFromRaw(sequence));
   }
 
   private handleSessionModalKey(key: KeyEvent): void {
+    if (this.hasSessionChoices()) {
+      const quickSelectIndex = quickSelectIndexFromSequence(key.sequence, this.sessionChoices.length);
+      if (quickSelectIndex !== null) {
+        this.sessionChoiceSelectedIndex = quickSelectIndex;
+        void this.connectSelectedSessionChoice();
+        return;
+      }
+      void this.applySessionChoiceAction(diffBaseActionFromKey(key));
+      return;
+    }
     this.applySessionModalAction(simpleModalActionFromKey(key));
   }
 
@@ -770,6 +806,39 @@ class GadgetUi {
         return;
       case "close":
         this.closeSessionModal();
+        return;
+    }
+  }
+
+  private async applySessionChoiceAction(action: ReturnType<typeof diffBaseActionFromRaw>): Promise<void> {
+    if (!action) {
+      return;
+    }
+    switch (action.type) {
+      case "forceQuit":
+        this.shutdownNow();
+        return;
+      case "quit":
+        this.shutdownNow();
+        return;
+      case "close":
+        this.closeSessionModal();
+        this.setStatus("clipboard mode");
+        return;
+      case "up":
+        this.selectSessionChoice(this.sessionChoiceSelectedIndex - 1);
+        return;
+      case "down":
+        this.selectSessionChoice(this.sessionChoiceSelectedIndex + 1);
+        return;
+      case "pageUp":
+        this.selectSessionChoice(this.sessionChoiceSelectedIndex - this.sessionChoiceVisibleRows());
+        return;
+      case "pageDown":
+        this.selectSessionChoice(this.sessionChoiceSelectedIndex + this.sessionChoiceVisibleRows());
+        return;
+      case "submit":
+        await this.connectSelectedSessionChoice();
         return;
     }
   }
@@ -1216,7 +1285,17 @@ class GadgetUi {
     if (!this.view) {
       return;
     }
-    this.view.renderSessionModal(this.sessionModalOpen, this.adapter.getSessionInfo?.() ?? { mode: this.adapter.label });
+    this.view.renderSessionModal(
+      this.sessionModalOpen,
+      this.adapter.getSessionInfo?.() ?? { mode: this.adapter.label },
+      this.hasSessionChoices()
+        ? {
+          sessions: this.sessionChoices,
+          selectedIndex: this.sessionChoiceSelectedIndex,
+          scrollOffset: this.sessionChoiceScrollOffset,
+        }
+        : undefined,
+    );
   }
 
   private renderCommentInputChange(): void {
@@ -2499,12 +2578,87 @@ class GadgetUi {
     this.renderAll();
   }
 
+  private openSessionChoiceModal(): void {
+    this.saveActiveAnnotationComment();
+    this.closeOverlays();
+    this.sessionChoiceSelectedIndex = clamp(this.sessionChoiceSelectedIndex, 0, this.sessionChoices.length - 1);
+    this.syncSessionChoiceScroll();
+    this.sessionModalOpen = true;
+    this.setStatus("select a session to connect");
+    this.renderAll();
+  }
+
   private closeSessionModal(): void {
     if (!this.sessionModalOpen) {
       return;
     }
     this.sessionModalOpen = false;
     this.renderAll();
+  }
+
+  private hasSessionChoices(): boolean {
+    return this.sessionChoices.length > 0 && Boolean(this.createAdapterForSession);
+  }
+
+  private selectSessionChoice(index: number): void {
+    if (this.sessionChoices.length === 0) {
+      return;
+    }
+    this.sessionChoiceSelectedIndex = clamp(index, 0, this.sessionChoices.length - 1);
+    this.syncSessionChoiceScroll();
+    this.renderSessionModal();
+    this.view?.requestRender();
+  }
+
+  private scrollSessionChoices(delta: number): void {
+    if (this.sessionChoices.length === 0) {
+      return;
+    }
+    const visibleRows = this.sessionChoiceVisibleRows();
+    this.sessionChoiceScrollOffset = clamp(this.sessionChoiceScrollOffset + delta, 0, Math.max(0, this.sessionChoices.length - visibleRows));
+    this.sessionChoiceSelectedIndex = clamp(this.sessionChoiceSelectedIndex, this.sessionChoiceScrollOffset, Math.min(this.sessionChoices.length - 1, this.sessionChoiceScrollOffset + visibleRows - 1));
+    this.renderSessionModal();
+    this.view?.requestRender();
+  }
+
+  private sessionChoiceVisibleRows(): number {
+    return Math.max(1, Math.min(this.sessionChoices.length, (this.view?.height ?? 12) - 2 - 2 * FILE_MODAL_MARGIN_Y));
+  }
+
+  private syncSessionChoiceScroll(): void {
+    const visibleRows = this.sessionChoiceVisibleRows();
+    if (this.sessionChoiceSelectedIndex < this.sessionChoiceScrollOffset) {
+      this.sessionChoiceScrollOffset = this.sessionChoiceSelectedIndex;
+    } else if (this.sessionChoiceSelectedIndex >= this.sessionChoiceScrollOffset + visibleRows) {
+      this.sessionChoiceScrollOffset = this.sessionChoiceSelectedIndex - visibleRows + 1;
+    }
+    this.sessionChoiceScrollOffset = clamp(this.sessionChoiceScrollOffset, 0, Math.max(0, this.sessionChoices.length - visibleRows));
+  }
+
+  private async connectSelectedSessionChoice(): Promise<void> {
+    const session = this.sessionChoices[this.sessionChoiceSelectedIndex];
+    if (!session || !this.createAdapterForSession) {
+      return;
+    }
+
+    await this.adapter.disconnect?.().catch(() => undefined);
+    this.adapter = this.createAdapterForSession(session);
+    this.cwd = session.cwd;
+    this.state = {
+      ...this.state,
+      cwd: session.cwd,
+      repositoryRoot: session.repositoryRoot,
+      worktreeName: session.worktreeName,
+      worktreePath: session.worktreePath,
+    };
+    await this.watcher?.close();
+    this.watcher = createDiffWatcher(this.cwd, () => {
+      void this.refreshDiffAndRender().catch((error) => this.setStatus(error.message));
+    });
+    this.sessionChoices = [];
+    this.sessionModalOpen = false;
+    await this.connectAdapter();
+    await this.refreshDiffAndRender();
   }
 
   private closeOverlays(): void {
@@ -3204,4 +3358,12 @@ function reviewCommentKey(filePath: string, line: DiffLineRef): string {
 
 function pluralize(word: string, count: number): string {
   return count === 1 ? word : `${word}s`;
+}
+
+function quickSelectIndexFromSequence(sequence: string, itemCount: number): number | null {
+  if (!/^[1-9]$/.test(sequence)) {
+    return null;
+  }
+  const index = Number(sequence) - 1;
+  return index < itemCount ? index : null;
 }
