@@ -6,7 +6,7 @@ It watches a working tree, renders live file diffs, lets you attach comments to 
 
 ## Quick Demonstration
 
-<video src="docs/assets/gadget-demo.mov" controls></video>
+![Quick demonstration of Gadget](docs/assets/gadget-demo.webp)
 
 ## Key Features
 
