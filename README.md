@@ -4,6 +4,18 @@ Gadget is a terminal diff reviewer for coding-agent sessions.
 
 It watches a working tree, renders live file diffs, lets you attach comments to diff lines, and can either copy comments to your clipboard or connect them to a live Codex thread.
 
+## Quick Demonstration
+
+<video src="docs/assets/gadget-demo.mov" controls></video>
+
+## Key Features
+
+- Live terminal diff viewer for active coding-agent worktrees.
+- Inline comments on specific diff lines.
+- Clipboard review mode for copying comments into any agent or chat.
+- Connected Codex mode for sending review comments back to a live session.
+- Full-file view, file search, diff-base selection, and keyboard-first navigation.
+
 ## Install
 
 Gadget requires Bun. The Codex CLI is optional for connected Codex sessions.
