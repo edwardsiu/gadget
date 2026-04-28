@@ -3441,16 +3441,9 @@ class GadgetUi {
     if (!this.continuousDiffActive()) {
       return file?.filePath ?? "no file";
     }
-    const visibleFile = this.topmostVisibleFile();
-    return visibleFile?.filePath ?? file?.filePath ?? "no file";
-  }
-
-  private topmostVisibleFile(): DiffFile | null {
-    if (!this.view) {
-      return null;
-    }
-    const line = this.selectedLines()[this.diffLineIndexFromVisualRow(Math.round(this.view.diffScroll.scrollTop))];
-    return line ? this.fileForPath(line.filePath) : null;
+    const cursorLine = this.selectedLine();
+    const cursorFile = cursorLine ? this.fileForPath(cursorLine.filePath) : null;
+    return cursorFile?.filePath ?? file?.filePath ?? "no file";
   }
 
   private setStatus(status: string): void {
