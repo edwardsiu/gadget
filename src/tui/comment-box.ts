@@ -1,4 +1,4 @@
-import { BoxRenderable, StyledText, TextRenderable, createTextAttributes, parseColor, type CliRenderer, type TextChunk } from "@opentui/core";
+import { BoxRenderable, StyledText, TextRenderable, parseColor, type CliRenderer, type TextChunk } from "@opentui/core";
 import { COLORS, COMMENT_BORDER, MIN_COMMENT_BODY_LINES } from "./theme";
 import { clamp } from "./text";
 import { wrapTextLine } from "./text";
@@ -10,7 +10,7 @@ export type InlineCommentBox = {
 };
 
 const COMMENT_PADDING = 1;
-const COMMENT_CURSOR_ATTRIBUTES = createTextAttributes({ inverse: true });
+const COMMENT_CURSOR = "█";
 
 type CommentLayoutRow = {
   text: string;
@@ -203,11 +203,11 @@ function appendCommentContentChunks(chunks: TextChunk[], value: string, width: n
 
   const clampedColumn = clamp(cursorColumn, 0, Math.max(0, width - 1));
   appendTextChunk(chunks, padded.slice(0, clampedColumn));
-  appendTextChunk(chunks, padded[clampedColumn] ?? " ", COMMENT_CURSOR_ATTRIBUTES);
+  appendTextChunk(chunks, COMMENT_CURSOR);
   appendTextChunk(chunks, padded.slice(clampedColumn + 1));
 }
 
-function appendTextChunk(chunks: TextChunk[], text: string, attributes?: number): void {
+function appendTextChunk(chunks: TextChunk[], text: string): void {
   if (text.length === 0) {
     return;
   }
@@ -216,7 +216,6 @@ function appendTextChunk(chunks: TextChunk[], text: string, attributes?: number)
     text,
     fg: parseColor(COLORS.text),
     bg: parseColor(COLORS.commentBg),
-    ...(attributes !== undefined ? { attributes } : {}),
   });
 }
 
