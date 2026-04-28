@@ -2373,12 +2373,23 @@ class GadgetUi {
       return;
     }
 
-    const file = this.selectedFile();
+    const selectedLine = this.selectedLine();
+    const selectedLineFile = this.fileViewMode === "diff" && selectedLine ? this.fileForPath(selectedLine.filePath) : null;
+    const file = selectedLineFile ?? this.selectedFile();
     if (!file) {
       return;
     }
 
-    const selectedLineNumber = selectedCurrentLineNumber(this.selectedLine()) ?? this.firstVisibleCurrentLineNumber() ?? 1;
+    if (selectedLineFile) {
+      this.selectedFileIndex = this.state.files.findIndex((stateFile) => stateFile.filePath === selectedLineFile.filePath);
+      this.revealSelectedFileInNav();
+      this.revealSelectedFileInModal();
+      if (this.fileTreeOpen) {
+        this.revealSelectedFileInTree();
+      }
+    }
+
+    const selectedLineNumber = selectedCurrentLineNumber(selectedLine) ?? this.firstVisibleCurrentLineNumber() ?? 1;
     let shouldCenterAfterRender = false;
     if (this.fileViewMode === "diff") {
       this.fileViewMode = "file";
