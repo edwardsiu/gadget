@@ -97,6 +97,7 @@ type InputMode = "none" | "comment" | "file-search" | "scratchpad-content";
 type FileViewMode = "diff" | "file";
 type DiffBaseOverrideSource = "github" | "manual";
 const MAX_SESSION_CHOICE_ROWS = 10;
+const MAX_SYNTAX_DOCUMENT_CACHE_ENTRIES = 128;
 type FileTreeNode = {
   children: Map<string, FileTreeNode>;
 };
@@ -117,6 +118,12 @@ type ReviewCommentTarget = {
 type ScratchpadCommentTarget = {
   key: string;
   lineNumber: number;
+};
+type SyntaxHighlightLineGroup = {
+  filePath: string;
+  filetype: string;
+  side: HighlightCacheSide;
+  lines: DiffLineRef[];
 };
 export type InitialFileTarget = {
   filePath: string;
@@ -221,7 +228,7 @@ class GadgetUi {
   private syntaxLineChunks = new Map<string, TextChunk[]>();
   private syntaxLineKeys = new Map<string, string>();
   private syntaxDocumentCache = new Map<string, HighlightCacheEntry>();
-  private pendingSyntaxDocuments = new Set<string>();
+  private pendingSyntaxDocuments = new Map<string, number>();
   private fullFileLines = new Map<string, DiffLineRef[]>();
   private lineRenderables = new Map<number, TextRenderable[]>();
   private rawInputHandler: ((sequence: string) => boolean) | null = null;
@@ -1403,6 +1410,8 @@ class GadgetUi {
     this.syntaxGeneration = generation;
     const nextLineChunks = new Map<string, TextChunk[]>();
     const nextLineKeys = new Map<string, string>();
+    this.syntaxDocumentCache.clear();
+    this.pendingSyntaxDocuments.clear();
 
     for (const file of this.state.files) {
       preserveSyntaxLineChunks(file.lines, this.syntaxLineChunks, this.syntaxLineKeys, nextLineChunks, nextLineKeys);
@@ -1418,9 +1427,7 @@ class GadgetUi {
     if (!this.view) {
       return;
     }
-    const file = this.selectedFile();
-    const filetype = file ? pathToFiletype(file.filePath) : null;
-    if (!file || !filetype) {
+    if (!this.selectedFile()) {
       return;
     }
 
@@ -1434,10 +1441,11 @@ class GadgetUi {
     );
     if (!lineIndexes.includes(this.selectedLineIndex)) {
       lineIndexes.push(this.selectedLineIndex);
+      lineIndexes.sort((left, right) => left - right);
     }
 
     const generation = this.syntaxGeneration;
-    const tasks = this.visibleSyntaxHighlightTasks(file.filePath, filetype, lines, lineIndexes, generation);
+    const tasks = this.visibleSyntaxHighlightTasks(lines, lineIndexes, generation);
     if (tasks.length === 0) {
       return;
     }
@@ -1454,29 +1462,54 @@ class GadgetUi {
   }
 
   private visibleSyntaxHighlightTasks(
-    filePath: string,
-    filetype: string,
     lines: DiffLineRef[],
     lineIndexes: number[],
     generation: number,
   ): Array<Promise<boolean>> {
+    const tasks: Array<Promise<boolean>> = [];
     if (this.fileViewMode === "file") {
-      const visibleLines = lineIndexes.map((index) => lines[index]).filter((line): line is DiffLineRef => {
-        return line !== undefined && line.kind !== "file" && this.shouldHighlightLine(line);
-      });
-      return this.highlightVisibleLineGroup(filePath, filetype, "full", visibleLines, generation);
+      for (const group of this.syntaxHighlightLineGroups(lines, lineIndexes, "full", (line) => line.kind !== "file")) {
+        tasks.push(...this.highlightVisibleLineGroup(group.filePath, group.filetype, group.side, group.lines, generation));
+      }
+      return tasks;
     }
 
-    const oldLines = lineIndexes.map((index) => lines[index]).filter((line): line is DiffLineRef => {
-      return line !== undefined && (line.kind === "context" || line.kind === "remove") && this.shouldHighlightLine(line);
-    });
-    const newLines = lineIndexes.map((index) => lines[index]).filter((line): line is DiffLineRef => {
-      return line !== undefined && (line.kind === "context" || line.kind === "add") && this.shouldHighlightLine(line);
-    });
-    return [
-      ...this.highlightVisibleLineGroup(filePath, filetype, "old", oldLines, generation),
-      ...this.highlightVisibleLineGroup(filePath, filetype, "new", newLines, generation),
-    ];
+    for (const group of this.syntaxHighlightLineGroups(lines, lineIndexes, "old", (line) => line.kind === "context" || line.kind === "remove")) {
+      tasks.push(...this.highlightVisibleLineGroup(group.filePath, group.filetype, group.side, group.lines, generation));
+    }
+    for (const group of this.syntaxHighlightLineGroups(lines, lineIndexes, "new", (line) => line.kind === "context" || line.kind === "add")) {
+      tasks.push(...this.highlightVisibleLineGroup(group.filePath, group.filetype, group.side, group.lines, generation));
+    }
+    return tasks;
+  }
+
+  private syntaxHighlightLineGroups(
+    lines: DiffLineRef[],
+    lineIndexes: number[],
+    side: HighlightCacheSide,
+    includeLine: (line: DiffLineRef) => boolean,
+  ): SyntaxHighlightLineGroup[] {
+    const groups = new Map<string, SyntaxHighlightLineGroup>();
+    for (const index of lineIndexes) {
+      const line = lines[index];
+      if (!line || !includeLine(line) || !this.shouldHighlightLine(line)) {
+        continue;
+      }
+      const filetype = pathToFiletype(line.filePath);
+      if (!filetype) {
+        continue;
+      }
+      const key = `${side}\0${line.filePath}\0${filetype}`;
+      const group = groups.get(key) ?? {
+        filePath: line.filePath,
+        filetype,
+        side,
+        lines: [],
+      };
+      group.lines.push(line);
+      groups.set(key, group);
+    }
+    return [...groups.values()];
   }
 
   private shouldHighlightLine(line: DiffLineRef): boolean {
@@ -1497,16 +1530,16 @@ class GadgetUi {
 
     const cacheKey = syntaxDocumentCacheKey(filePath, filetype, side, document.lines);
     const documentKey = syntaxDocumentKey(filetype, document.content);
-    const cached = this.syntaxDocumentCache.get(cacheKey);
-    if (cached?.documentKey === documentKey) {
+    const cached = this.cachedSyntaxDocument(cacheKey, documentKey);
+    if (cached) {
       applySyntaxChunks(document, cached.chunksByLine, this.syntaxLineChunks, this.syntaxLineKeys);
       return [Promise.resolve(true)];
     }
-    if (this.pendingSyntaxDocuments.has(cacheKey)) {
+    if (this.pendingSyntaxDocuments.get(cacheKey) === generation) {
       return [];
     }
 
-    this.pendingSyntaxDocuments.add(cacheKey);
+    this.pendingSyntaxDocuments.set(cacheKey, generation);
     return [this.highlightVisibleLineGroupAsync(cacheKey, documentKey, document, filetype, generation)];
   }
 
@@ -1526,14 +1559,38 @@ class GadgetUi {
       const chunksByLine = splitTextChunksByLine(
         treeSitterToTextChunks(document.content, result.highlights, this.syntaxStyle, { enabled: false }),
       );
-      this.syntaxDocumentCache.set(cacheKey, { documentKey, chunksByLine });
+      this.setCachedSyntaxDocument(cacheKey, { documentKey, chunksByLine });
       applySyntaxChunks(document, chunksByLine, this.syntaxLineChunks, this.syntaxLineKeys);
       return true;
     } catch {
       // Syntax highlighting is best-effort; plain diff text is the fallback.
       return false;
     } finally {
-      this.pendingSyntaxDocuments.delete(cacheKey);
+      if (this.pendingSyntaxDocuments.get(cacheKey) === generation) {
+        this.pendingSyntaxDocuments.delete(cacheKey);
+      }
+    }
+  }
+
+  private cachedSyntaxDocument(cacheKey: string, documentKey: string): HighlightCacheEntry | null {
+    const cached = this.syntaxDocumentCache.get(cacheKey);
+    if (!cached || cached.documentKey !== documentKey) {
+      return null;
+    }
+    this.syntaxDocumentCache.delete(cacheKey);
+    this.syntaxDocumentCache.set(cacheKey, cached);
+    return cached;
+  }
+
+  private setCachedSyntaxDocument(cacheKey: string, entry: HighlightCacheEntry): void {
+    this.syntaxDocumentCache.delete(cacheKey);
+    this.syntaxDocumentCache.set(cacheKey, entry);
+    while (this.syntaxDocumentCache.size > MAX_SYNTAX_DOCUMENT_CACHE_ENTRIES) {
+      const oldestKey = this.syntaxDocumentCache.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      this.syntaxDocumentCache.delete(oldestKey);
     }
   }
 
