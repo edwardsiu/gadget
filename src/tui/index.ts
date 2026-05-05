@@ -73,6 +73,7 @@ import {
   simpleModalActionFromKey,
   simpleModalActionFromRaw,
   textActionFromKey,
+  textActionFromPasteText,
   textActionFromRaw,
   verticalScrollDirection,
 } from "./input";
@@ -351,6 +352,9 @@ class GadgetUi {
     this.view.onKeypress((key) => {
       void this.handleKey(key);
     });
+    this.view.onPaste((text) => {
+      void this.handlePaste(text);
+    });
   }
 
   private startCommentCursorTimer(): void {
@@ -414,6 +418,14 @@ class GadgetUi {
     }
 
     await this.applyTextInputAction(textActionFromKey(key));
+  }
+
+  private async handlePaste(text: string): Promise<void> {
+    if (this.mode !== "comment" && this.mode !== "scratchpad-content") {
+      return;
+    }
+
+    await this.applyTextInputAction(textActionFromPasteText(text));
   }
 
   private async applyTextInputAction(action: ReturnType<typeof textActionFromRaw>): Promise<void> {

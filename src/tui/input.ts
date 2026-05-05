@@ -217,6 +217,11 @@ export function textActionFromRaw(sequence: string): TextInputAction | null {
   }
 }
 
+export function textActionFromPasteText(text: string): TextInputAction | null {
+  const normalizedText = normalizeInputText(text);
+  return normalizedText.length > 0 ? { type: "insert", text: normalizedText } : null;
+}
+
 export function textActionFromKey(key: KeyEvent): TextInputAction | null {
   if (key.name === "escape" || key.sequence === "\u001b") {
     return { type: "cancel" };

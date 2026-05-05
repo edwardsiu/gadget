@@ -2,8 +2,10 @@ import {
   BoxRenderable,
   CliRenderEvents,
   createCliRenderer,
+  decodePasteBytes,
   MouseButton,
   ScrollBoxRenderable,
+  stripAnsiSequences,
   TextRenderable,
   type CliRenderer,
 } from "@opentui/core";
@@ -228,6 +230,12 @@ export class GadgetRenderer {
 
   onKeypress(callback: (key: KeyEvent) => void): void {
     this.renderer.keyInput.on("keypress", callback);
+  }
+
+  onPaste(callback: (text: string) => void): void {
+    this.renderer.keyInput.on("paste", (event) => {
+      callback(stripAnsiSequences(decodePasteBytes(event.bytes)));
+    });
   }
 
   requestRender(): void {
