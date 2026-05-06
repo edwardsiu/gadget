@@ -2136,7 +2136,7 @@ class GadgetUi {
     this.diffBaseError = null;
     this.renderAll();
     try {
-      const candidates = await listDiffBaseCandidates(this.state.cwd, { includePullRequestBase: true });
+      const candidates = await listDiffBaseCandidates(this.state.cwd);
       if (generation !== this.diffBaseLoadGeneration) {
         return;
       }
@@ -2145,6 +2145,7 @@ class GadgetUi {
       this.selectCurrentDiffBaseCandidate();
       this.clampDiffBaseModalScrollOffset();
       this.renderAll();
+      void this.refreshDiffBaseCandidatesWithPullRequest(generation);
     } catch (error) {
       if (generation !== this.diffBaseLoadGeneration) {
         return;
@@ -2153,6 +2154,20 @@ class GadgetUi {
       this.diffBaseError = `Could not load diff bases: ${error instanceof Error ? error.message : String(error)}`;
       this.renderAll();
     }
+  }
+
+  private async refreshDiffBaseCandidatesWithPullRequest(generation: number): Promise<void> {
+    const candidates = await listDiffBaseCandidates(this.state.cwd, { includePullRequestBase: true }).catch(() => null);
+    if (!candidates) {
+      return;
+    }
+    if (generation !== this.diffBaseLoadGeneration || !this.diffBaseModalOpen) {
+      return;
+    }
+    this.diffBaseCandidates = candidates;
+    this.selectCurrentDiffBaseCandidate();
+    this.clampDiffBaseModalScrollOffset();
+    this.renderAll();
   }
 
   private async refreshGitHubDiffBase(): Promise<void> {

@@ -143,18 +143,30 @@ export async function findBranchDiffBase(cwd: string): Promise<string> {
 }
 
 export async function listDiffBaseCandidates(cwd: string, options: DiffBaseCandidateOptions = {}): Promise<DiffBaseCandidate[]> {
-  const currentBranch = await readCurrentBranch(cwd);
+  const currentBranchPromise = readCurrentBranch(cwd);
+  const pullRequestRefsPromise = options.includePullRequestBase ? pullRequestBaseRefs(cwd) : Promise.resolve([]);
+  const defaultRefsPromise = defaultDiffBaseRefs(cwd);
+  const currentBranch = await currentBranchPromise;
+  const [pullRequestRefs, configuredRefs, upstreamRefs, defaultRefs] = await Promise.all([
+    pullRequestRefsPromise,
+    configuredDiffBaseRefs(cwd, currentBranch),
+    upstreamDiffBaseRefs(cwd, currentBranch),
+    defaultRefsPromise,
+  ]);
   const refs = uniqueDiffBaseRefs([
-    ...(options.includePullRequestBase ? await pullRequestBaseRefs(cwd) : []),
-    ...await configuredDiffBaseRefs(cwd, currentBranch),
-    ...await upstreamDiffBaseRefs(cwd, currentBranch),
-    ...await defaultDiffBaseRefs(cwd),
+    ...pullRequestRefs,
+    ...configuredRefs,
+    ...upstreamRefs,
+    ...defaultRefs,
   ]);
 
   const candidates: DiffBaseCandidate[] = [];
   const seenMergeBases = new Set<string>();
-  for (const ref of refs) {
-    const mergeBase = (await tryReadOnlyGit(cwd, ["merge-base", "HEAD", ref.ref]))?.trim();
+  const mergeBaseResults = await Promise.all(refs.map(async (ref) => ({
+    ref,
+    mergeBase: (await tryReadOnlyGit(cwd, ["merge-base", "HEAD", ref.ref]))?.trim(),
+  })));
+  for (const { ref, mergeBase } of mergeBaseResults) {
     if (!mergeBase || seenMergeBases.has(mergeBase)) {
       continue;
     }
@@ -317,8 +329,8 @@ async function findOriginDefaultBranch(cwd: string): Promise<string | null> {
     return symbolicRef;
   }
 
-  const remoteHead = (await tryReadOnlyGit(cwd, ["remote", "show", "origin"]))?.match(/HEAD branch: (.+)/)?.[1]?.trim();
-  return remoteHead ? `origin/${remoteHead}` : null;
+  const remoteHead = (await tryReadOnlyGit(cwd, ["remote", "show", "-n", "origin"]))?.match(/HEAD branch: (.+)/)?.[1]?.trim();
+  return remoteHead && remoteHead !== "(not queried)" ? `origin/${remoteHead}` : null;
 }
 
 function uniqueRefs(refs: Array<string | null | undefined>): string[] {
