@@ -43,12 +43,12 @@ async function startBridge(pi, ctx) {
         return;
       }
 
-      if (request.method === "GET" && (url.pathname === "/feedback" || url.pathname === "/scratchpad")) {
+      if (request.method === "GET" && url.pathname === "/feedback") {
         writeJson(response, 200, { ok: true, text: latestAssistantText(currentCtx) });
         return;
       }
 
-      if (request.method === "GET" && (url.pathname === "/feedback/turns" || url.pathname === "/scratchpad/turns")) {
+      if (request.method === "GET" && url.pathname === "/feedback/turns") {
         writeJson(response, 200, { ok: true, turns: assistantTurnChoices(currentCtx) });
         return;
       }
