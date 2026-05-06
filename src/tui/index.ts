@@ -79,7 +79,7 @@ import {
 } from "./input";
 import { navWidthFor, type NavMode } from "./nav-format";
 import { GadgetRenderer } from "./renderer";
-import { clamp } from "./text";
+import { clamp, truncateMiddle } from "./text";
 import {
   COLORS,
   DIFF_BORDER_FG,
@@ -98,6 +98,7 @@ type InputMode = "none" | "comment" | "file-search" | "feedback-content";
 type FileViewMode = "diff" | "file";
 type DiffBaseOverrideSource = "github" | "manual";
 const MAX_SESSION_CHOICE_ROWS = 10;
+const MAX_FEEDBACK_STATUS_SUMMARY_LENGTH = 80;
 const MAX_SYNTAX_DOCUMENT_CACHE_ENTRIES = 128;
 type FileTreeNode = {
   children: Map<string, FileTreeNode>;
@@ -599,9 +600,17 @@ class GadgetUi {
         this.pageLines(1);
         return;
       case "previousFile":
+        if (this.feedbackMode) {
+          this.cycleFeedbackTurn(-1);
+          return;
+        }
         this.selectFile(this.selectedFileIndex - 1);
         return;
       case "nextFile":
+        if (this.feedbackMode) {
+          this.cycleFeedbackTurn(1);
+          return;
+        }
         this.selectFile(this.selectedFileIndex + 1);
         return;
       case "submitOrComment":
@@ -1322,7 +1331,7 @@ class GadgetUi {
       borderFg: this.diffBorderFg(),
       annotationModeLabel: this.annotationModeLabel(),
       bottomDockOpen: this.bottomDockOpen(),
-      fileLabel: this.feedbackMode ? "Feedback" : this.statusFileLabel(file),
+      fileLabel: this.feedbackMode ? this.feedbackStatusFileLabel() : this.statusFileLabel(file),
       actionHint: this.annotationActionHint(),
     });
   }
@@ -1680,6 +1689,19 @@ class GadgetUi {
       return `Feedback [${this.feedbackCommentCount()}]`;
     }
     return "";
+  }
+
+  private feedbackStatusFileLabel(): string {
+    const turn = this.feedbackTurnChoices[this.feedbackTurnSelectedIndex];
+    if (!turn) {
+      return "Feedback";
+    }
+
+    const summary = truncateMiddle(turn.text.replace(/\s+/g, " ").trim(), MAX_FEEDBACK_STATUS_SUMMARY_LENGTH);
+    const turnLabel = this.feedbackTurnChoices.length > 1
+      ? `${this.feedbackTurnSelectedIndex + 1}/${this.feedbackTurnChoices.length}`
+      : "1/1";
+    return summary ? `Feedback ${turnLabel}: ${summary}` : `Feedback ${turnLabel}: ${turn.label}`;
   }
 
   private isAnnotationMode(): boolean {
@@ -2925,7 +2947,21 @@ class GadgetUi {
       return;
     }
     this.feedbackTurnModalOpen = false;
-    this.startFeedbackDocument(turn.text);
+    this.startFeedbackDocument(turn.text, { preserveTurns: true });
+  }
+
+  private cycleFeedbackTurn(delta: number): void {
+    const count = this.feedbackTurnChoices.length;
+    if (count <= 1) {
+      this.setStatus("no other feedback turns");
+      this.renderStatus();
+      this.view?.requestRender();
+      return;
+    }
+
+    this.feedbackTurnSelectedIndex = (this.feedbackTurnSelectedIndex + delta + count) % count;
+    this.syncFeedbackTurnScroll();
+    this.startFeedbackFromSelectedTurn();
   }
 
   private closeOverlays(): void {
@@ -3227,6 +3263,9 @@ class GadgetUi {
     try {
       const turns = await this.adapter.getFeedbackTurns?.() ?? [];
       const nonEmptyTurns = turns.filter((turn) => turn.text.trim().length > 0);
+      this.feedbackTurnChoices = nonEmptyTurns;
+      this.feedbackTurnSelectedIndex = 0;
+      this.feedbackTurnScrollOffset = 0;
       if (nonEmptyTurns.length > 1) {
         this.openFeedbackTurnModal(nonEmptyTurns);
         return;
@@ -3244,7 +3283,7 @@ class GadgetUi {
     }
 
     if (text?.trim()) {
-      this.startFeedbackDocument(text);
+      this.startFeedbackDocument(text, { preserveTurns: this.feedbackTurnChoices.length > 0 });
       return;
     }
 
@@ -3504,12 +3543,16 @@ class GadgetUi {
     this.startFeedbackDocument(value);
   }
 
-  private startFeedbackDocument(value: string): void {
+  private startFeedbackDocument(value: string, options: { preserveTurns?: boolean } = {}): void {
     this.feedbackDocument = createFeedbackDocument(value);
     this.feedbackComments.clear();
     this.activeFeedbackTarget = null;
     this.feedbackTurnModalOpen = false;
-    this.feedbackTurnChoices = [];
+    if (!options.preserveTurns) {
+      this.feedbackTurnChoices = [];
+      this.feedbackTurnSelectedIndex = 0;
+      this.feedbackTurnScrollOffset = 0;
+    }
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();
