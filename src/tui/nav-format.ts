@@ -3,13 +3,14 @@ import {
   type TextChunk,
 } from "@opentui/core";
 import type { DiffFile } from "../types";
-import { appendPlainChunk, appendStyledChunk, truncate, truncateMiddle, truncateToWidth } from "./text";
+import { appendPlainChunk, appendStyledChunk, truncate, truncateEnd, truncateMiddle, truncateToWidth } from "./text";
 import {
   COLORS,
   NAV_BORDER,
 } from "./theme";
 
 export type NavMode = "normal" | "compact";
+export type BottomBarLabelTruncation = "preserve-end" | "preserve-start";
 
 export function navWidthFor(mode: NavMode): number {
   return mode === "compact" ? 0 : 34;
@@ -22,7 +23,7 @@ export function formatDiffTopBar(cwd: string, branchName: string, width: number,
   return new StyledText(chunks);
 }
 
-export function formatDiffBottomBar(filePath: string, width: number, hasLeftBorder: boolean, borderFg: string, rightHint: string | null): StyledText {
+export function formatDiffBottomBar(filePath: string, width: number, hasLeftBorder: boolean, borderFg: string, rightHint: string | null, labelTruncation: BottomBarLabelTruncation = "preserve-end"): StyledText {
   const usableWidth = Math.max(1, width);
   const chunks: TextChunk[] = [];
   if (usableWidth === 1) {
@@ -40,7 +41,9 @@ export function formatDiffBottomBar(filePath: string, width: number, hasLeftBord
     return new StyledText(chunks);
   }
 
-  const label = truncateToWidth(filePath, labelWidth);
+  const label = labelTruncation === "preserve-start"
+    ? truncateEnd(filePath, labelWidth)
+    : truncateToWidth(filePath, labelWidth);
   appendDiffLeftCorner(chunks, hasLeftBorder ? NAV_BORDER.bottomLeft : null, borderFg);
   appendStyledChunk(chunks, NAV_BORDER.horizontal, { fg: borderFg, bg: COLORS.bg });
   appendPlainChunk(chunks, " ");

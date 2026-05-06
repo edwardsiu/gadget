@@ -24,6 +24,19 @@ export function truncateToWidth(value: string, width: number): string {
   return `…${value.slice(-(width - 1))}`;
 }
 
+export function truncateEnd(value: string, width: number): string {
+  if (width <= 0) {
+    return "";
+  }
+  if (value.length <= width) {
+    return value;
+  }
+  if (width === 1) {
+    return "…";
+  }
+  return `${value.slice(0, width - 1)}…`;
+}
+
 export function truncateMiddle(value: string, width: number): string {
   if (width <= 0) {
     return "";

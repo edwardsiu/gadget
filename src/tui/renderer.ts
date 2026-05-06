@@ -18,7 +18,7 @@ import { type FuzzyFileMatch, FileSearchModal } from "./file-search-modal";
 import { FileSelectorModal } from "./file-selector-modal";
 import { FileTreeSidebar, type FileTreeRow } from "./file-tree-sidebar";
 import { HelpModal } from "./help-modal";
-import { formatDiffBottomBar, formatDiffTopBar, formatFileCardNav, formatNavBox, navWidthFor, type NavMode } from "./nav-format";
+import { formatDiffBottomBar, formatDiffTopBar, formatFileCardNav, formatNavBox, navWidthFor, type BottomBarLabelTruncation, type NavMode } from "./nav-format";
 import { FeedbackTurnModal } from "./feedback-turn-modal";
 import { SessionModal } from "./session-modal";
 import { COLORS, DIFF_BOTTOM_BAR_LINES, DIFF_TOP_BAR_LINES, NAV_HINT_OPEN } from "./theme";
@@ -302,6 +302,7 @@ export class GadgetRenderer {
     annotationModeLabel: string;
     bottomDockOpen: boolean;
     fileLabel: string;
+    fileLabelTruncation?: BottomBarLabelTruncation;
     actionHint: string | null;
   }): void {
     this.diffTopBarText.content = formatDiffTopBar(
@@ -322,6 +323,7 @@ export class GadgetRenderer {
       options.hasLeftBorder,
       options.borderFg,
       options.actionHint,
+      options.fileLabelTruncation,
     );
   }
 

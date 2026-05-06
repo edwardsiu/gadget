@@ -79,7 +79,7 @@ import {
 } from "./input";
 import { navWidthFor, type NavMode } from "./nav-format";
 import { GadgetRenderer } from "./renderer";
-import { clamp, truncateMiddle } from "./text";
+import { clamp, truncateEnd } from "./text";
 import {
   COLORS,
   DIFF_BORDER_FG,
@@ -1332,6 +1332,7 @@ class GadgetUi {
       annotationModeLabel: this.annotationModeLabel(),
       bottomDockOpen: this.bottomDockOpen(),
       fileLabel: this.feedbackMode ? this.feedbackStatusFileLabel() : this.statusFileLabel(file),
+      fileLabelTruncation: this.feedbackMode ? "preserve-start" : "preserve-end",
       actionHint: this.annotationActionHint(),
     });
   }
@@ -1697,11 +1698,10 @@ class GadgetUi {
       return "Feedback";
     }
 
-    const summary = truncateMiddle(turn.text.replace(/\s+/g, " ").trim(), MAX_FEEDBACK_STATUS_SUMMARY_LENGTH);
-    const turnLabel = this.feedbackTurnChoices.length > 1
-      ? `${this.feedbackTurnSelectedIndex + 1}/${this.feedbackTurnChoices.length}`
-      : "1/1";
-    return summary ? `Feedback ${turnLabel}: ${summary}` : `Feedback ${turnLabel}: ${turn.label}`;
+    const prefix = `${feedbackTurnStatusLabel(turn, this.feedbackTurnSelectedIndex)}: `;
+    const text = turn.text.replace(/\s+/g, " ").trim() || turn.label;
+    const summary = truncateEnd(text, Math.max(0, MAX_FEEDBACK_STATUS_SUMMARY_LENGTH - prefix.length));
+    return `${prefix}${summary}`;
   }
 
   private isAnnotationMode(): boolean {
@@ -3737,6 +3737,11 @@ function reviewCommentKey(filePath: string, line: DiffLineRef): string {
 
 function pluralize(word: string, count: number): string {
   return count === 1 ? word : `${word}s`;
+}
+
+function feedbackTurnStatusLabel(turn: AgentFeedbackTurn, selectedIndex: number): string {
+  const match = turn.label.match(/\bturn\s+(\d+)\b/i);
+  return match ? `Turn ${match[1]}` : `Turn ${selectedIndex + 1}`;
 }
 
 function quickSelectIndexFromSequence(sequence: string, itemCount: number): number | null {
