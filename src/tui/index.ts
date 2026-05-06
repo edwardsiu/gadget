@@ -601,14 +601,14 @@ class GadgetUi {
         return;
       case "previousFile":
         if (this.feedbackMode) {
-          this.cycleFeedbackTurn(-1);
+          this.cycleFeedbackTurn(1);
           return;
         }
         this.selectFile(this.selectedFileIndex - 1);
         return;
       case "nextFile":
         if (this.feedbackMode) {
-          this.cycleFeedbackTurn(1);
+          this.cycleFeedbackTurn(-1);
           return;
         }
         this.selectFile(this.selectedFileIndex + 1);
