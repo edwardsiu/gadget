@@ -9,6 +9,7 @@ import {
 } from "@opentui/core";
 import type { KeyEvent } from "@opentui/core";
 import { basename } from "node:path";
+import { ClipboardAdapter } from "../adapters/clipboard-adapter";
 import { createComment, formatReviewPrompt } from "../comments";
 import { readGadgetConfig, type DiffViewConfig } from "../config";
 import { createDiffWatcher, listDiffBaseCandidates, listSearchableFiles, readDiffState, type DiffBaseCandidate, type GitInfo, type ReadDiffStateOptions } from "../git";
@@ -103,6 +104,11 @@ const MAX_FEEDBACK_STATUS_SUMMARY_LENGTH = 80;
 const MAX_SYNTAX_DOCUMENT_CACHE_ENTRIES = 128;
 type FileTreeNode = {
   children: Map<string, FileTreeNode>;
+};
+
+type PromptSendResult = {
+  deliveryLabel: string;
+  clipboardFallback: boolean;
 };
 type ReviewCommentDraft = {
   key: string;
@@ -3367,10 +3373,10 @@ class GadgetUi {
     const comments = drafts.map((draft) => createComment(this.cwd, draft.file, draft.line, draft.value, { includeHunk: draft.includeHunk }));
     this.setStatus(`${this.adapter.label === "clipboard" ? "copying" : "sending"} ${comments.length} review ${pluralize("comment", comments.length)}`);
     try {
-      await this.sendReviewComments(comments);
+      const result = await this.sendReviewComments(comments);
       for (const comment of comments) {
-        comment.status = this.adapter.label === "clipboard" ? "copied" : "sent";
-        comment.delivery = this.adapter.label;
+        comment.status = result.deliveryLabel === "clipboard" ? "copied" : "sent";
+        comment.delivery = result.deliveryLabel;
       }
       this.reviewMode = false;
       this.reviewComments.clear();
@@ -3378,7 +3384,9 @@ class GadgetUi {
       this.mode = "none";
       this.input = "";
       this.resetInputCursor();
-      this.setStatus(`${this.adapter.label === "clipboard" ? "copied" : "sent"} ${comments.length} review ${pluralize("comment", comments.length)}`);
+      this.setStatus(result.clipboardFallback
+        ? `agent session closed; copied ${comments.length} review ${pluralize("comment", comments.length)} to clipboard`
+        : `${result.deliveryLabel === "clipboard" ? "copied" : "sent"} ${comments.length} review ${pluralize("comment", comments.length)}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       for (const comment of comments) {
@@ -3428,7 +3436,7 @@ class GadgetUi {
     const prompt = formatFeedbackPromptGroups(groups);
     this.setStatus(`${this.adapter.label === "clipboard" ? "copying" : "sending"} ${draftCount} feedback ${pluralize("comment", draftCount)}`);
     try {
-      await this.adapter.sendPrompt(prompt);
+      const result = await this.sendPromptWithClipboardFallback(prompt);
       this.feedbackMode = false;
       this.feedbackDocument = null;
       this.resetFeedbackComments();
@@ -3438,7 +3446,9 @@ class GadgetUi {
       this.mode = "none";
       this.input = "";
       this.resetInputCursor();
-      this.setStatus(`${this.adapter.label === "clipboard" ? "copied" : "sent"} ${draftCount} feedback ${pluralize("comment", draftCount)}`);
+      this.setStatus(result.clipboardFallback
+        ? `agent session closed; copied ${draftCount} feedback ${pluralize("comment", draftCount)} to clipboard`
+        : `${result.deliveryLabel === "clipboard" ? "copied" : "sent"} ${draftCount} feedback ${pluralize("comment", draftCount)}`);
     } catch (error) {
       this.setStatus(`feedback send failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -3478,15 +3488,56 @@ class GadgetUi {
     this.renderAll();
   }
 
-  private async sendReviewComments(comments: AgentComment[]): Promise<void> {
+  private async sendReviewComments(comments: AgentComment[]): Promise<PromptSendResult> {
+    const prompt = formatReviewPrompt(comments);
     if (this.adapter.sendPrompt) {
-      await this.adapter.sendPrompt(formatReviewPrompt(comments));
-      return;
+      return await this.sendPromptWithClipboardFallback(prompt);
     }
 
-    for (const comment of comments) {
-      await this.adapter.sendComment(comment);
+    const deliveryLabel = this.adapter.label;
+    try {
+      for (const comment of comments) {
+        await this.adapter.sendComment(comment);
+      }
+      return { deliveryLabel, clipboardFallback: false };
+    } catch (error) {
+      if (!this.shouldFallbackToClipboard(error)) {
+        throw error;
+      }
+      return await this.copyPromptWithClipboardFallback(prompt);
     }
+  }
+
+  private async sendPromptWithClipboardFallback(prompt: string): Promise<PromptSendResult> {
+    if (!this.adapter.sendPrompt) {
+      throw new Error("adapter cannot send prompts");
+    }
+
+    const deliveryLabel = this.adapter.label;
+    try {
+      await this.adapter.sendPrompt(prompt);
+      return { deliveryLabel, clipboardFallback: false };
+    } catch (error) {
+      if (!this.shouldFallbackToClipboard(error)) {
+        throw error;
+      }
+      return await this.copyPromptWithClipboardFallback(prompt);
+    }
+  }
+
+  private shouldFallbackToClipboard(error: unknown): boolean {
+    if (this.adapter.label === "clipboard") {
+      return false;
+    }
+
+    return isBackingSessionUnavailableError(error);
+  }
+
+  private async copyPromptWithClipboardFallback(prompt: string): Promise<PromptSendResult> {
+    await this.adapter.disconnect?.().catch(() => undefined);
+    this.adapter = new ClipboardAdapter();
+    await this.adapter.sendPrompt?.(prompt);
+    return { deliveryLabel: "clipboard", clipboardFallback: true };
   }
 
   private selectedFile(): DiffFile | null {
@@ -3646,6 +3697,24 @@ function reviewCommentKey(filePath: string, line: DiffLineRef): string {
     line.hunkHeader ?? "",
     line.text,
   ].join("\0");
+}
+
+function isBackingSessionUnavailableError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return [
+    "codex disconnected",
+    "codex app-server websocket closed",
+    "codex app-server websocket error",
+    "codex app-server websocket is not open",
+    "could not connect to codex app-server",
+    "websocket open failed",
+    "fetch failed",
+    "connection refused",
+    "econnrefused",
+    "econnreset",
+    "epipe",
+    "socket closed",
+  ].some((pattern) => message.includes(pattern));
 }
 
 function pluralize(word: string, count: number): string {
