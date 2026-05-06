@@ -33,12 +33,12 @@ export class PiBridgeAdapter implements AgentAdapter {
   }
 
   async getFeedbackText(): Promise<string | null> {
-    const response = await this.request("/feedback", { method: "GET" });
+    const response = await this.requestWithLegacyFallback("/feedback", "/scratchpad", { method: "GET" });
     return response.text ?? null;
   }
 
   async getFeedbackTurns(): Promise<AgentFeedbackTurn[]> {
-    const response = await this.request("/feedback/turns", { method: "GET" });
+    const response = await this.requestWithLegacyFallback("/feedback/turns", "/scratchpad/turns", { method: "GET" });
     return Array.isArray(response.turns) ? response.turns : [];
   }
 
@@ -59,6 +59,17 @@ export class PiBridgeAdapter implements AgentAdapter {
     return this.status;
   }
 
+  private async requestWithLegacyFallback(path: string, legacyPath: string, init: RequestInit): Promise<BridgeResponse> {
+    try {
+      return await this.request(path, init);
+    } catch (error) {
+      if (!isBridgeNotFoundError(error)) {
+        throw error;
+      }
+      return await this.request(legacyPath, init);
+    }
+  }
+
   private async request(path: string, init: RequestInit): Promise<BridgeResponse> {
     const response = await fetch(`${this.session.url}${path}`, {
       ...init,
@@ -70,10 +81,21 @@ export class PiBridgeAdapter implements AgentAdapter {
     });
     const payload = await parseBridgeResponse(response);
     if (!response.ok || payload.ok === false) {
-      throw new Error(payload.error ?? `Pi bridge request failed: ${response.status}`);
+      throw new PiBridgeRequestError(payload.error ?? `Pi bridge request failed: ${response.status}`, response.status);
     }
     return payload;
   }
+}
+
+class PiBridgeRequestError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = "PiBridgeRequestError";
+  }
+}
+
+function isBridgeNotFoundError(error: unknown): boolean {
+  return error instanceof PiBridgeRequestError && error.statusCode === 404;
 }
 
 async function parseBridgeResponse(response: Response): Promise<BridgeResponse> {
