@@ -48,6 +48,11 @@ async function startBridge(pi, ctx) {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/scratchpad/turns") {
+        writeJson(response, 200, { ok: true, turns: assistantTurnChoices(currentCtx) });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/send") {
         const body = await readJsonBody(request);
         const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
@@ -161,10 +166,27 @@ function writeJson(response, status, payload) {
 }
 
 function latestAssistantText(ctx) {
-  const entry = [...ctx.sessionManager.getBranch()]
-    .reverse()
-    .find((entry) => entry.type === "message" && entry.message?.role === "assistant");
-  return entry ? messageText(entry.message) : null;
+  return assistantTurnChoices(ctx)[0]?.text ?? null;
+}
+
+function assistantTurnChoices(ctx) {
+  const turns = [];
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "message" || entry.message?.role !== "assistant") {
+      continue;
+    }
+    const text = messageText(entry.message).trim();
+    if (!text) {
+      continue;
+    }
+    turns.push({
+      id: String(entry.id ?? `assistant-${turns.length + 1}`),
+      label: `Assistant turn ${turns.length + 1}`,
+      text,
+      createdAt: entry.timestamp ?? null,
+    });
+  }
+  return turns.reverse();
 }
 
 function messageText(message) {

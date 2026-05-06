@@ -51,6 +51,13 @@ export type AgentSessionInfo = {
   details?: Array<{ label: string; value: string }>;
 };
 
+export type AgentScratchpadTurn = {
+  id: string;
+  label: string;
+  text: string;
+  createdAt?: string | null;
+};
+
 export interface AgentAdapter {
   label: string;
   connect?(): Promise<void>;
@@ -58,6 +65,7 @@ export interface AgentAdapter {
   sendComment(comment: AgentComment): Promise<void>;
   sendPrompt?(prompt: string): Promise<void>;
   getScratchpadText?(): Promise<string | null>;
+  getScratchpadTurns?(): Promise<AgentScratchpadTurn[]>;
   getSessionInfo?(): AgentSessionInfo;
   getStatus(): string;
 }

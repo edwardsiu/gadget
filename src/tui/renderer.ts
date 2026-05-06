@@ -12,13 +12,14 @@ import {
 import type { KeyEvent } from "@opentui/core";
 import type { DiffBaseCandidate } from "../git";
 import type { RuntimeSession } from "../runtimes/types";
-import type { AgentSessionInfo, DiffFile } from "../types";
+import type { AgentScratchpadTurn, AgentSessionInfo, DiffFile } from "../types";
 import { DiffBaseModal } from "./diff-base-modal";
 import { type FuzzyFileMatch, FileSearchModal } from "./file-search-modal";
 import { FileSelectorModal } from "./file-selector-modal";
 import { FileTreeSidebar, type FileTreeRow } from "./file-tree-sidebar";
 import { HelpModal } from "./help-modal";
 import { formatDiffBottomBar, formatDiffTopBar, formatFileCardNav, formatNavBox, navWidthFor, type NavMode } from "./nav-format";
+import { ScratchpadTurnModal } from "./scratchpad-turn-modal";
 import { SessionModal } from "./session-modal";
 import { COLORS, DIFF_BOTTOM_BAR_LINES, DIFF_TOP_BAR_LINES, NAV_HINT_OPEN } from "./theme";
 
@@ -39,6 +40,8 @@ export type GadgetRendererCallbacks = {
   onDiffBaseScroll: (delta: number) => void;
   onSelectSessionChoice: (index: number) => void;
   onSessionChoiceScroll: (delta: number) => void;
+  onSelectScratchpadTurn: (index: number) => void;
+  onScratchpadTurnScroll: (delta: number) => void;
 };
 
 export class GadgetRenderer {
@@ -54,6 +57,7 @@ export class GadgetRenderer {
   readonly diffBaseModal: DiffBaseModal;
   readonly helpModal: HelpModal;
   readonly sessionModal: SessionModal;
+  readonly scratchpadTurnModal: ScratchpadTurnModal;
 
   static async create(callbacks: GadgetRendererCallbacks): Promise<GadgetRenderer> {
     const renderer = await createCliRenderer({
@@ -189,6 +193,10 @@ export class GadgetRenderer {
       onSelectSession: callbacks.onSelectSessionChoice,
       onScrollSessions: callbacks.onSessionChoiceScroll,
     });
+    this.scratchpadTurnModal = new ScratchpadTurnModal(renderer, {
+      onSelectTurn: callbacks.onSelectScratchpadTurn,
+      onScrollTurns: callbacks.onScratchpadTurnScroll,
+    });
 
     root.add(this.fileTreeSidebar.renderable);
     root.add(this.navText);
@@ -198,6 +206,7 @@ export class GadgetRenderer {
     root.add(this.diffBaseModal.renderable);
     root.add(this.helpModal.renderable);
     root.add(this.sessionModal.renderable);
+    root.add(this.scratchpadTurnModal.renderable);
     renderer.root.add(root);
   }
 
@@ -392,6 +401,19 @@ export class GadgetRenderer {
           scrollOffset: choices.scrollOffset,
         }
         : {}),
+      rendererWidth: this.width,
+      rendererHeight: this.height,
+    });
+  }
+
+  renderScratchpadTurnModal(options: {
+    open: boolean;
+    turns: AgentScratchpadTurn[];
+    selectedIndex: number;
+    scrollOffset: number;
+  }): void {
+    this.scratchpadTurnModal.render({
+      ...options,
       rendererWidth: this.width,
       rendererHeight: this.height,
     });

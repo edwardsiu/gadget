@@ -21,7 +21,7 @@ import {
   type ScratchpadCommentDraft,
   type ScratchpadDocument,
 } from "../scratchpad";
-import type { AgentAdapter, AgentComment, DiffFile, DiffLineRef, DiffState } from "../types";
+import type { AgentAdapter, AgentComment, AgentScratchpadTurn, DiffFile, DiffLineRef, DiffState } from "../types";
 import { commentCursorIndexAtPoint, createInlineCommentBox, formatInlineComment, inlineCommentHeight, moveCommentCursorVertically } from "./comment-box";
 import { diffStateSignature, mergeDiffRefreshOptions } from "./diff-state";
 import {
@@ -215,6 +215,10 @@ class GadgetUi {
   private scratchpadDocument: ScratchpadDocument | null = null;
   private scratchpadComments = new Map<string, ScratchpadCommentDraft>();
   private activeScratchpadTarget: ScratchpadCommentTarget | null = null;
+  private scratchpadTurnModalOpen = false;
+  private scratchpadTurnChoices: AgentScratchpadTurn[] = [];
+  private scratchpadTurnSelectedIndex = 0;
+  private scratchpadTurnScrollOffset = 0;
   private input = "";
   private inputCursorIndex = 0;
   private inputCursorPreferredColumn: number | null = null;
@@ -311,6 +315,11 @@ class GadgetUi {
         void this.connectSelectedSessionChoice();
       },
       onSessionChoiceScroll: (delta) => this.scrollSessionChoices(delta),
+      onSelectScratchpadTurn: (index) => {
+        this.scratchpadTurnSelectedIndex = index;
+        this.startScratchpadFromSelectedTurn();
+      },
+      onScratchpadTurnScroll: (delta) => this.scrollScratchpadTurns(delta),
     });
     this.bindInput();
     this.startCommentCursorTimer();
@@ -380,6 +389,11 @@ class GadgetUi {
 
     if (this.sessionModalOpen) {
       this.handleSessionModalSequence(sequence);
+      return;
+    }
+
+    if (this.scratchpadTurnModalOpen) {
+      this.handleScratchpadTurnModalSequence(sequence);
       return;
     }
 
@@ -517,6 +531,11 @@ class GadgetUi {
 
     if (this.sessionModalOpen) {
       this.handleSessionModalKey(key);
+      return;
+    }
+
+    if (this.scratchpadTurnModalOpen) {
+      this.handleScratchpadTurnModalKey(key);
       return;
     }
 
@@ -862,6 +881,58 @@ class GadgetUi {
     }
   }
 
+  private handleScratchpadTurnModalSequence(sequence: string): void {
+    const quickSelectIndex = quickSelectIndexFromSequence(sequence, this.scratchpadTurnChoices.length);
+    if (quickSelectIndex !== null) {
+      this.scratchpadTurnSelectedIndex = quickSelectIndex;
+      this.startScratchpadFromSelectedTurn();
+      return;
+    }
+    this.applyScratchpadTurnModalAction(diffBaseActionFromRaw(sequence));
+  }
+
+  private handleScratchpadTurnModalKey(key: KeyEvent): void {
+    const quickSelectIndex = quickSelectIndexFromSequence(key.sequence, this.scratchpadTurnChoices.length);
+    if (quickSelectIndex !== null) {
+      this.scratchpadTurnSelectedIndex = quickSelectIndex;
+      this.startScratchpadFromSelectedTurn();
+      return;
+    }
+    this.applyScratchpadTurnModalAction(diffBaseActionFromKey(key));
+  }
+
+  private applyScratchpadTurnModalAction(action: ReturnType<typeof diffBaseActionFromRaw>): void {
+    if (!action) {
+      return;
+    }
+    switch (action.type) {
+      case "forceQuit":
+        this.shutdownNow();
+        return;
+      case "quit":
+        this.shutdownNow();
+        return;
+      case "close":
+        this.cancelScratchpad();
+        return;
+      case "up":
+        this.selectScratchpadTurn(this.scratchpadTurnSelectedIndex - 1);
+        return;
+      case "down":
+        this.selectScratchpadTurn(this.scratchpadTurnSelectedIndex + 1);
+        return;
+      case "pageUp":
+        this.selectScratchpadTurn(this.scratchpadTurnSelectedIndex - this.scratchpadTurnVisibleRows());
+        return;
+      case "pageDown":
+        this.selectScratchpadTurn(this.scratchpadTurnSelectedIndex + this.scratchpadTurnVisibleRows());
+        return;
+      case "submit":
+        this.startScratchpadFromSelectedTurn();
+        return;
+    }
+  }
+
   private async connectAdapter(): Promise<void> {
     try {
       await this.adapter.connect?.();
@@ -953,6 +1024,7 @@ class GadgetUi {
     this.renderDiffBaseModal();
     this.renderHelpModal();
     this.renderSessionModal();
+    this.renderScratchpadTurnModal();
     this.view?.requestRender();
   }
 
@@ -1338,6 +1410,18 @@ class GadgetUi {
         }
         : undefined,
     );
+  }
+
+  private renderScratchpadTurnModal(): void {
+    if (!this.view) {
+      return;
+    }
+    this.view.renderScratchpadTurnModal({
+      open: this.scratchpadTurnModalOpen,
+      turns: this.scratchpadTurnChoices,
+      selectedIndex: this.scratchpadTurnSelectedIndex,
+      scrollOffset: this.scratchpadTurnScrollOffset,
+    });
   }
 
   private renderCommentInputChange(): void {
@@ -2790,6 +2874,60 @@ class GadgetUi {
     await this.refreshDiffAndRender();
   }
 
+  private openScratchpadTurnModal(turns: AgentScratchpadTurn[]): void {
+    this.scratchpadTurnChoices = turns;
+    this.scratchpadTurnSelectedIndex = 0;
+    this.scratchpadTurnScrollOffset = 0;
+    this.scratchpadTurnModalOpen = true;
+    this.syncScratchpadTurnScroll();
+    this.setStatus("select agent turn to reply to");
+    this.renderAll();
+  }
+
+  private selectScratchpadTurn(index: number): void {
+    if (this.scratchpadTurnChoices.length === 0) {
+      return;
+    }
+    this.scratchpadTurnSelectedIndex = clamp(index, 0, this.scratchpadTurnChoices.length - 1);
+    this.syncScratchpadTurnScroll();
+    this.renderScratchpadTurnModal();
+    this.view?.requestRender();
+  }
+
+  private scrollScratchpadTurns(delta: number): void {
+    if (this.scratchpadTurnChoices.length === 0) {
+      return;
+    }
+    const visibleRows = this.scratchpadTurnVisibleRows();
+    this.scratchpadTurnScrollOffset = clamp(this.scratchpadTurnScrollOffset + delta, 0, Math.max(0, this.scratchpadTurnChoices.length - visibleRows));
+    this.scratchpadTurnSelectedIndex = clamp(this.scratchpadTurnSelectedIndex, this.scratchpadTurnScrollOffset, Math.min(this.scratchpadTurnChoices.length - 1, this.scratchpadTurnScrollOffset + visibleRows - 1));
+    this.renderScratchpadTurnModal();
+    this.view?.requestRender();
+  }
+
+  private scratchpadTurnVisibleRows(): number {
+    return Math.max(1, Math.min(this.scratchpadTurnChoices.length, MAX_SESSION_CHOICE_ROWS, (this.view?.height ?? 12) - 2 - 2 * FILE_MODAL_MARGIN_Y));
+  }
+
+  private syncScratchpadTurnScroll(): void {
+    const visibleRows = this.scratchpadTurnVisibleRows();
+    if (this.scratchpadTurnSelectedIndex < this.scratchpadTurnScrollOffset) {
+      this.scratchpadTurnScrollOffset = this.scratchpadTurnSelectedIndex;
+    } else if (this.scratchpadTurnSelectedIndex >= this.scratchpadTurnScrollOffset + visibleRows) {
+      this.scratchpadTurnScrollOffset = this.scratchpadTurnSelectedIndex - visibleRows + 1;
+    }
+    this.scratchpadTurnScrollOffset = clamp(this.scratchpadTurnScrollOffset, 0, Math.max(0, this.scratchpadTurnChoices.length - visibleRows));
+  }
+
+  private startScratchpadFromSelectedTurn(): void {
+    const turn = this.scratchpadTurnChoices[this.scratchpadTurnSelectedIndex];
+    if (!turn) {
+      return;
+    }
+    this.scratchpadTurnModalOpen = false;
+    this.startScratchpadDocument(turn.text);
+  }
+
   private closeOverlays(): void {
     this.fileTreeOpen = false;
     this.fileModalOpen = false;
@@ -2797,6 +2935,7 @@ class GadgetUi {
     this.diffBaseModalOpen = false;
     this.helpModalOpen = false;
     this.sessionModalOpen = false;
+    this.scratchpadTurnModalOpen = false;
   }
 
   private resetInputCursor(): void {
@@ -3055,6 +3194,8 @@ class GadgetUi {
     this.scratchpadDocument = null;
     this.scratchpadComments.clear();
     this.activeScratchpadTarget = null;
+    this.scratchpadTurnModalOpen = false;
+    this.scratchpadTurnChoices = [];
     this.setStatus("review mode");
   }
 
@@ -3073,6 +3214,10 @@ class GadgetUi {
     this.scratchpadDocument = null;
     this.scratchpadComments.clear();
     this.activeScratchpadTarget = null;
+    this.scratchpadTurnModalOpen = false;
+    this.scratchpadTurnChoices = [];
+    this.scratchpadTurnSelectedIndex = 0;
+    this.scratchpadTurnScrollOffset = 0;
     this.input = "";
     this.resetInputCursor();
     this.closeOverlays();
@@ -3080,9 +3225,22 @@ class GadgetUi {
 
     let text: string | null = null;
     try {
-      text = await this.adapter.getScratchpadText?.() ?? null;
+      const turns = await this.adapter.getScratchpadTurns?.() ?? [];
+      const nonEmptyTurns = turns.filter((turn) => turn.text.trim().length > 0);
+      if (nonEmptyTurns.length > 1) {
+        this.openScratchpadTurnModal(nonEmptyTurns);
+        return;
+      }
+      text = nonEmptyTurns[0]?.text ?? null;
     } catch (error) {
-      this.setStatus(`scratchpad autofill failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.setStatus(`scratchpad turn list failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!text) {
+      try {
+        text = await this.adapter.getScratchpadText?.() ?? null;
+      } catch (error) {
+        this.setStatus(`scratchpad autofill failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
 
     if (text?.trim()) {
@@ -3113,6 +3271,8 @@ class GadgetUi {
     this.scratchpadDocument = null;
     this.scratchpadComments.clear();
     this.activeScratchpadTarget = null;
+    this.scratchpadTurnModalOpen = false;
+    this.scratchpadTurnChoices = [];
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();
@@ -3322,6 +3482,8 @@ class GadgetUi {
       this.scratchpadDocument = null;
       this.scratchpadComments.clear();
       this.activeScratchpadTarget = null;
+      this.scratchpadTurnModalOpen = false;
+      this.scratchpadTurnChoices = [];
       this.mode = "none";
       this.input = "";
       this.resetInputCursor();
@@ -3346,6 +3508,8 @@ class GadgetUi {
     this.scratchpadDocument = createScratchpadDocument(value);
     this.scratchpadComments.clear();
     this.activeScratchpadTarget = null;
+    this.scratchpadTurnModalOpen = false;
+    this.scratchpadTurnChoices = [];
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();

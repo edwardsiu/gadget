@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
-import type { AgentAdapter, AgentComment, AgentSessionInfo } from "../types";
+import type { AgentAdapter, AgentComment, AgentScratchpadTurn, AgentSessionInfo } from "../types";
 import { formatCommentPrompt } from "../comments";
 import { readGitInfo } from "../git";
 import { isGadgetCmuxSessionRecord, isGadgetCodexSessionRecord, isGadgetPiSessionRecord, readSessionRegistry, writeSessionRegistry, type GadgetCodexSessionRecord, type GadgetPiSessionRecord, type GadgetSessionRecord } from "../session-registry";
@@ -136,7 +136,18 @@ export class CodexAppServerAdapter implements AgentAdapter {
 
     const thread = await this.readThreadAllowingEmptyTurns();
     this.syncThread(thread);
-    return latestAgentMessageText(thread);
+    return agentMessageChoices(thread)[0]?.text ?? null;
+  }
+
+  async getScratchpadTurns(): Promise<AgentScratchpadTurn[]> {
+    await this.connect();
+    if (!this.client || !this.threadId) {
+      return [];
+    }
+
+    const thread = await this.readThreadAllowingEmptyTurns();
+    this.syncThread(thread);
+    return agentMessageChoices(thread);
   }
 
   getStatus(): string {
@@ -439,20 +450,43 @@ function toLiveSession(session: GadgetCodexSession & { threadId: string }, threa
   };
 }
 
-function latestAgentMessageText(thread: unknown): string | null {
+function agentMessageChoices(thread: unknown): AgentScratchpadTurn[] {
   const threadRecord = recordValue(thread);
   const turns = Array.isArray(threadRecord?.turns) ? threadRecord.turns : [];
-  for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
-    const turn = recordValue(turns[turnIndex]);
+  const choices: AgentScratchpadTurn[] = [];
+
+  for (const turnValue of turns) {
+    const turn = recordValue(turnValue);
     const items = Array.isArray(turn?.items) ? turn.items : [];
-    for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-      const item = recordValue(items[itemIndex]);
-      if (item?.type === "agentMessage" && typeof item.text === "string" && item.text.trim().length > 0) {
-        return item.text;
-      }
+    const messages = items
+      .map(recordValue)
+      .filter((item): item is Record<string, unknown> => item?.type === "agentMessage" && typeof item.text === "string" && item.text.trim().length > 0);
+    if (messages.length === 0) {
+      continue;
     }
+
+    const finalMessages = messages.filter((item) => item.phase === "final_answer");
+    const text = (finalMessages.length > 0 ? finalMessages : messages)
+      .map((item) => String(item.text).trim())
+      .filter(Boolean)
+      .join("\n\n");
+    if (!text) {
+      continue;
+    }
+
+    choices.push({
+      id: typeof turn?.id === "string" ? turn.id : `turn-${choices.length + 1}`,
+      label: `Turn ${choices.length + 1}`,
+      text,
+      createdAt: typeof turn?.completedAt === "number"
+        ? new Date(turn.completedAt * 1000).toISOString()
+        : typeof turn?.startedAt === "number"
+          ? new Date(turn.startedAt * 1000).toISOString()
+          : null,
+    });
   }
-  return null;
+
+  return choices.reverse();
 }
 
 function isIncludeTurnsUnavailable(error: unknown): boolean {
