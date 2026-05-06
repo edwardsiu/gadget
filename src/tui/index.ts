@@ -14,14 +14,14 @@ import { readGadgetConfig, type DiffViewConfig } from "../config";
 import { createDiffWatcher, listDiffBaseCandidates, listSearchableFiles, readDiffState, type DiffBaseCandidate, type GitInfo, type ReadDiffStateOptions } from "../git";
 import type { RuntimeAdapterFactory, RuntimeSession } from "../runtimes/types";
 import {
-  createScratchpadDocument,
-  formatScratchpadPrompt,
-  scratchpadCommentKey,
-  scratchpadDocumentToDiffFile,
-  type ScratchpadCommentDraft,
-  type ScratchpadDocument,
-} from "../scratchpad";
-import type { AgentAdapter, AgentComment, AgentScratchpadTurn, DiffFile, DiffLineRef, DiffState } from "../types";
+  createFeedbackDocument,
+  formatFeedbackPrompt,
+  feedbackCommentKey,
+  feedbackDocumentToDiffFile,
+  type FeedbackCommentDraft,
+  type FeedbackDocument,
+} from "../feedback";
+import type { AgentAdapter, AgentComment, AgentFeedbackTurn, DiffFile, DiffLineRef, DiffState } from "../types";
 import { commentCursorIndexAtPoint, createInlineCommentBox, formatInlineComment, inlineCommentHeight, moveCommentCursorVertically } from "./comment-box";
 import { diffStateSignature, mergeDiffRefreshOptions } from "./diff-state";
 import {
@@ -94,7 +94,7 @@ import {
   SYNTAX_HIGHLIGHT_OVERSCAN_ROWS,
 } from "./theme";
 
-type InputMode = "none" | "comment" | "file-search" | "scratchpad-content";
+type InputMode = "none" | "comment" | "file-search" | "feedback-content";
 type FileViewMode = "diff" | "file";
 type DiffBaseOverrideSource = "github" | "manual";
 const MAX_SESSION_CHOICE_ROWS = 10;
@@ -116,7 +116,7 @@ type ReviewCommentTarget = {
   line: DiffLineRef;
   includeHunk: boolean;
 };
-type ScratchpadCommentTarget = {
+type FeedbackCommentTarget = {
   key: string;
   lineNumber: number;
 };
@@ -211,14 +211,14 @@ class GadgetUi {
   private reviewMode = false;
   private reviewComments = new Map<string, ReviewCommentDraft>();
   private activeReviewTarget: ReviewCommentTarget | null = null;
-  private scratchpadMode = false;
-  private scratchpadDocument: ScratchpadDocument | null = null;
-  private scratchpadComments = new Map<string, ScratchpadCommentDraft>();
-  private activeScratchpadTarget: ScratchpadCommentTarget | null = null;
-  private scratchpadTurnModalOpen = false;
-  private scratchpadTurnChoices: AgentScratchpadTurn[] = [];
-  private scratchpadTurnSelectedIndex = 0;
-  private scratchpadTurnScrollOffset = 0;
+  private feedbackMode = false;
+  private feedbackDocument: FeedbackDocument | null = null;
+  private feedbackComments = new Map<string, FeedbackCommentDraft>();
+  private activeFeedbackTarget: FeedbackCommentTarget | null = null;
+  private feedbackTurnModalOpen = false;
+  private feedbackTurnChoices: AgentFeedbackTurn[] = [];
+  private feedbackTurnSelectedIndex = 0;
+  private feedbackTurnScrollOffset = 0;
   private input = "";
   private inputCursorIndex = 0;
   private inputCursorPreferredColumn: number | null = null;
@@ -315,11 +315,11 @@ class GadgetUi {
         void this.connectSelectedSessionChoice();
       },
       onSessionChoiceScroll: (delta) => this.scrollSessionChoices(delta),
-      onSelectScratchpadTurn: (index) => {
-        this.scratchpadTurnSelectedIndex = index;
-        this.startScratchpadFromSelectedTurn();
+      onSelectFeedbackTurn: (index) => {
+        this.feedbackTurnSelectedIndex = index;
+        this.startFeedbackFromSelectedTurn();
       },
-      onScratchpadTurnScroll: (delta) => this.scrollScratchpadTurns(delta),
+      onFeedbackTurnScroll: (delta) => this.scrollFeedbackTurns(delta),
     });
     this.bindInput();
     this.startCommentCursorTimer();
@@ -392,8 +392,8 @@ class GadgetUi {
       return;
     }
 
-    if (this.scratchpadTurnModalOpen) {
-      this.handleScratchpadTurnModalSequence(sequence);
+    if (this.feedbackTurnModalOpen) {
+      this.handleFeedbackTurnModalSequence(sequence);
       return;
     }
 
@@ -435,7 +435,7 @@ class GadgetUi {
   }
 
   private async handlePaste(text: string): Promise<void> {
-    if (this.mode !== "comment" && this.mode !== "scratchpad-content") {
+    if (this.mode !== "comment" && this.mode !== "feedback-content") {
       return;
     }
 
@@ -452,16 +452,16 @@ class GadgetUi {
         this.shutdownNow();
         return;
       case "cancel":
-        if (this.mode === "scratchpad-content") {
-          this.cancelScratchpad();
+        if (this.mode === "feedback-content") {
+          this.cancelFeedback();
           return;
         }
         if (this.mode === "comment" && this.reviewMode) {
           this.cancelActiveReviewEdit();
           return;
         }
-        if (this.mode === "comment" && this.scratchpadMode) {
-          this.cancelActiveScratchpadEdit();
+        if (this.mode === "comment" && this.feedbackMode) {
+          this.cancelActiveFeedbackEdit();
           return;
         }
         this.mode = "none";
@@ -479,7 +479,7 @@ class GadgetUi {
         this.renderCommentInputChange();
         return;
       case "newline":
-        if (this.mode === "comment" || this.mode === "scratchpad-content") {
+        if (this.mode === "comment" || this.mode === "feedback-content") {
           this.insertInputText("\n");
           this.renderCommentInputChange();
         }
@@ -490,13 +490,13 @@ class GadgetUi {
         }
         return;
       case "insert":
-        if (this.mode === "comment" || this.mode === "scratchpad-content") {
+        if (this.mode === "comment" || this.mode === "feedback-content") {
           this.insertInputText(action.text);
           this.renderCommentInputChange();
         }
         return;
       case "move":
-        if (this.mode === "comment" || this.mode === "scratchpad-content") {
+        if (this.mode === "comment" || this.mode === "feedback-content") {
           this.moveInputCursor(action.direction, action.unit);
           this.renderCommentInputChange();
         }
@@ -507,12 +507,12 @@ class GadgetUi {
           this.saveActiveAnnotationComment();
           return;
         }
-        if (mode === "comment" && this.scratchpadMode) {
-          this.saveActiveScratchpadComment();
+        if (mode === "comment" && this.feedbackMode) {
+          this.saveActiveFeedbackComment();
           return;
         }
-        if (mode === "scratchpad-content") {
-          this.saveScratchpadContent(this.input);
+        if (mode === "feedback-content") {
+          this.saveFeedbackContent(this.input);
         }
         return;
     }
@@ -534,8 +534,8 @@ class GadgetUi {
       return;
     }
 
-    if (this.scratchpadTurnModalOpen) {
-      this.handleScratchpadTurnModalKey(key);
+    if (this.feedbackTurnModalOpen) {
+      this.handleFeedbackTurnModalKey(key);
       return;
     }
 
@@ -576,8 +576,8 @@ class GadgetUi {
           this.closeFileTree();
         } else if (this.reviewMode) {
           this.cancelReview();
-        } else if (this.scratchpadMode) {
-          this.cancelScratchpad();
+        } else if (this.feedbackMode) {
+          this.cancelFeedback();
         }
         return;
       case "lineUp":
@@ -609,8 +609,8 @@ class GadgetUi {
           await this.completeReview();
           return;
         }
-        if (this.scratchpadMode) {
-          await this.completeScratchpad();
+        if (this.feedbackMode) {
+          await this.completeFeedback();
           return;
         }
         this.openComment();
@@ -633,8 +633,8 @@ class GadgetUi {
       case "openSession":
         this.openSessionModal();
         return;
-      case "replyAgentTurn":
-        await this.enterScratchpadMode();
+      case "openFeedback":
+        await this.enterFeedbackMode();
         return;
       case "toggleFileView":
         await this.toggleFileViewMode();
@@ -881,27 +881,27 @@ class GadgetUi {
     }
   }
 
-  private handleScratchpadTurnModalSequence(sequence: string): void {
-    const quickSelectIndex = quickSelectIndexFromSequence(sequence, this.scratchpadTurnChoices.length);
+  private handleFeedbackTurnModalSequence(sequence: string): void {
+    const quickSelectIndex = quickSelectIndexFromSequence(sequence, this.feedbackTurnChoices.length);
     if (quickSelectIndex !== null) {
-      this.scratchpadTurnSelectedIndex = quickSelectIndex;
-      this.startScratchpadFromSelectedTurn();
+      this.feedbackTurnSelectedIndex = quickSelectIndex;
+      this.startFeedbackFromSelectedTurn();
       return;
     }
-    this.applyScratchpadTurnModalAction(diffBaseActionFromRaw(sequence));
+    this.applyFeedbackTurnModalAction(diffBaseActionFromRaw(sequence));
   }
 
-  private handleScratchpadTurnModalKey(key: KeyEvent): void {
-    const quickSelectIndex = quickSelectIndexFromSequence(key.sequence, this.scratchpadTurnChoices.length);
+  private handleFeedbackTurnModalKey(key: KeyEvent): void {
+    const quickSelectIndex = quickSelectIndexFromSequence(key.sequence, this.feedbackTurnChoices.length);
     if (quickSelectIndex !== null) {
-      this.scratchpadTurnSelectedIndex = quickSelectIndex;
-      this.startScratchpadFromSelectedTurn();
+      this.feedbackTurnSelectedIndex = quickSelectIndex;
+      this.startFeedbackFromSelectedTurn();
       return;
     }
-    this.applyScratchpadTurnModalAction(diffBaseActionFromKey(key));
+    this.applyFeedbackTurnModalAction(diffBaseActionFromKey(key));
   }
 
-  private applyScratchpadTurnModalAction(action: ReturnType<typeof diffBaseActionFromRaw>): void {
+  private applyFeedbackTurnModalAction(action: ReturnType<typeof diffBaseActionFromRaw>): void {
     if (!action) {
       return;
     }
@@ -913,22 +913,22 @@ class GadgetUi {
         this.shutdownNow();
         return;
       case "close":
-        this.cancelScratchpad();
+        this.cancelFeedback();
         return;
       case "up":
-        this.selectScratchpadTurn(this.scratchpadTurnSelectedIndex - 1);
+        this.selectFeedbackTurn(this.feedbackTurnSelectedIndex - 1);
         return;
       case "down":
-        this.selectScratchpadTurn(this.scratchpadTurnSelectedIndex + 1);
+        this.selectFeedbackTurn(this.feedbackTurnSelectedIndex + 1);
         return;
       case "pageUp":
-        this.selectScratchpadTurn(this.scratchpadTurnSelectedIndex - this.scratchpadTurnVisibleRows());
+        this.selectFeedbackTurn(this.feedbackTurnSelectedIndex - this.feedbackTurnVisibleRows());
         return;
       case "pageDown":
-        this.selectScratchpadTurn(this.scratchpadTurnSelectedIndex + this.scratchpadTurnVisibleRows());
+        this.selectFeedbackTurn(this.feedbackTurnSelectedIndex + this.feedbackTurnVisibleRows());
         return;
       case "submit":
-        this.startScratchpadFromSelectedTurn();
+        this.startFeedbackFromSelectedTurn();
         return;
     }
   }
@@ -994,7 +994,7 @@ class GadgetUi {
     this.revealSelectedFileInModal();
     this.preserveSyntaxHighlights();
     const selectedFile = this.selectedFile();
-    if (this.fileViewMode === "file" && selectedFile && !this.scratchpadMode) {
+    if (this.fileViewMode === "file" && selectedFile && !this.feedbackMode) {
       await this.refreshCurrentFileView(selectedFile);
     }
     const selectedLines = this.selectedLines();
@@ -1024,7 +1024,7 @@ class GadgetUi {
     this.renderDiffBaseModal();
     this.renderHelpModal();
     this.renderSessionModal();
-    this.renderScratchpadTurnModal();
+    this.renderFeedbackTurnModal();
     this.view?.requestRender();
   }
 
@@ -1074,8 +1074,8 @@ class GadgetUi {
     this.inlineCommentText = null;
     this.inlineCommentHeightRows = 0;
 
-    if (this.mode === "scratchpad-content") {
-      this.renderScratchpadContentInput();
+    if (this.mode === "feedback-content") {
+      this.renderFeedbackContentInput();
       return;
     }
 
@@ -1113,13 +1113,13 @@ class GadgetUi {
     lines.forEach((line, index) => {
       const selected = index === this.selectedLineIndex;
       const reviewKey = reviewCommentKey(file.filePath, line);
-      const scratchpadKey = scratchpadCommentKey(line.newLine ?? index + 1);
+      const feedbackKey = feedbackCommentKey(line.newLine ?? index + 1);
       const savedReviewComment = this.reviewMode ? this.reviewComments.get(reviewKey) ?? null : null;
-      const savedScratchpadComment = this.scratchpadMode ? this.scratchpadComments.get(scratchpadKey) ?? null : null;
-      const savedAnnotationComment = savedReviewComment ?? savedScratchpadComment;
+      const savedFeedbackComment = this.feedbackMode ? this.feedbackComments.get(feedbackKey) ?? null : null;
+      const savedAnnotationComment = savedReviewComment ?? savedFeedbackComment;
       const editingReviewComment = this.reviewMode && this.mode === "comment" && this.activeReviewTarget?.key === reviewKey;
-      const editingScratchpadComment = this.scratchpadMode && this.mode === "comment" && this.activeScratchpadTarget?.key === scratchpadKey;
-      const editingAnnotationComment = editingReviewComment || editingScratchpadComment;
+      const editingFeedbackComment = this.feedbackMode && this.mode === "comment" && this.activeFeedbackTarget?.key === feedbackKey;
+      const editingAnnotationComment = editingReviewComment || editingFeedbackComment;
       if (line.kind === "file") {
         const headerFile = this.fileForPath(line.filePath) ?? file;
         const headerRows = formatDiffViewportFileHeaderRows(headerFile, diffWidth, selected, index > 0, hasLeftBorder, borderFg);
@@ -1253,7 +1253,7 @@ class GadgetUi {
     this.refreshVisibleSyntaxHighlights();
   }
 
-  private renderScratchpadContentInput(): void {
+  private renderFeedbackContentInput(): void {
     if (!this.view) {
       return;
     }
@@ -1264,7 +1264,7 @@ class GadgetUi {
     const borderFg = this.diffBorderFg();
     let renderedRows = 0;
     const title = view.createTextRenderable({
-      id: "gadget-scratchpad-content-title",
+      id: "gadget-feedback-content-title",
       height: 1,
       width: diffWidth,
       fg: COLORS.muted,
@@ -1281,7 +1281,7 @@ class GadgetUi {
 
     const commentBox = createInlineCommentBox({
       renderer: view.renderer,
-      id: "gadget-scratchpad-content-input",
+      id: "gadget-feedback-content-input",
       value: this.input,
       width: diffWidth,
       submitLabel: "Start",
@@ -1322,7 +1322,7 @@ class GadgetUi {
       borderFg: this.diffBorderFg(),
       annotationModeLabel: this.annotationModeLabel(),
       bottomDockOpen: this.bottomDockOpen(),
-      fileLabel: this.scratchpadMode ? "Feedback" : this.statusFileLabel(file),
+      fileLabel: this.feedbackMode ? "Feedback" : this.statusFileLabel(file),
       actionHint: this.annotationActionHint(),
     });
   }
@@ -1412,15 +1412,15 @@ class GadgetUi {
     );
   }
 
-  private renderScratchpadTurnModal(): void {
+  private renderFeedbackTurnModal(): void {
     if (!this.view) {
       return;
     }
-    this.view.renderScratchpadTurnModal({
-      open: this.scratchpadTurnModalOpen,
-      turns: this.scratchpadTurnChoices,
-      selectedIndex: this.scratchpadTurnSelectedIndex,
-      scrollOffset: this.scratchpadTurnScrollOffset,
+    this.view.renderFeedbackTurnModal({
+      open: this.feedbackTurnModalOpen,
+      turns: this.feedbackTurnChoices,
+      selectedIndex: this.feedbackTurnSelectedIndex,
+      scrollOffset: this.feedbackTurnScrollOffset,
     });
   }
 
@@ -1451,7 +1451,7 @@ class GadgetUi {
       this.diffPaneWidth(),
       "Save",
       true,
-      this.isEditingSavedReviewComment() || this.isEditingSavedScratchpadComment(),
+      this.isEditingSavedReviewComment() || this.isEditingSavedFeedbackComment(),
       this.commentCursorVisible,
       this.inputCursorIndex,
     );
@@ -1665,7 +1665,7 @@ class GadgetUi {
   }
 
   private annotationActionHint(): string | null {
-    if (!this.isAnnotationMode() || this.isEditingAnnotationComment() || this.mode === "scratchpad-content") {
+    if (!this.isAnnotationMode() || this.isEditingAnnotationComment() || this.mode === "feedback-content") {
       return null;
     }
     const submitLabel = this.adapter.label === "clipboard" ? "Copy" : "Submit";
@@ -1676,18 +1676,18 @@ class GadgetUi {
     if (this.reviewMode) {
       return `Review [${this.reviewCommentCount()}]`;
     }
-    if (this.scratchpadMode) {
-      return `Feedback [${this.scratchpadCommentCount()}]`;
+    if (this.feedbackMode) {
+      return `Feedback [${this.feedbackCommentCount()}]`;
     }
     return "";
   }
 
   private isAnnotationMode(): boolean {
-    return this.reviewMode || this.scratchpadMode;
+    return this.reviewMode || this.feedbackMode;
   }
 
   private isEditingAnnotationComment(): boolean {
-    return this.isEditingReviewComment() || this.isEditingScratchpadComment();
+    return this.isEditingReviewComment() || this.isEditingFeedbackComment();
   }
 
   private reviewCommentCount(): number {
@@ -1706,20 +1706,20 @@ class GadgetUi {
     return this.isEditingReviewComment() && this.activeReviewTarget !== null && this.reviewComments.has(this.activeReviewTarget.key);
   }
 
-  private scratchpadCommentCount(): number {
-    const unsavedActiveComment = this.isEditingScratchpadComment() &&
-      this.activeScratchpadTarget &&
-      !this.scratchpadComments.has(this.activeScratchpadTarget.key) &&
+  private feedbackCommentCount(): number {
+    const unsavedActiveComment = this.isEditingFeedbackComment() &&
+      this.activeFeedbackTarget &&
+      !this.feedbackComments.has(this.activeFeedbackTarget.key) &&
       this.input.trim().length > 0;
-    return this.scratchpadComments.size + (unsavedActiveComment ? 1 : 0);
+    return this.feedbackComments.size + (unsavedActiveComment ? 1 : 0);
   }
 
-  private isEditingScratchpadComment(): boolean {
-    return this.scratchpadMode && this.mode === "comment" && this.activeScratchpadTarget !== null;
+  private isEditingFeedbackComment(): boolean {
+    return this.feedbackMode && this.mode === "comment" && this.activeFeedbackTarget !== null;
   }
 
-  private isEditingSavedScratchpadComment(): boolean {
-    return this.isEditingScratchpadComment() && this.activeScratchpadTarget !== null && this.scratchpadComments.has(this.activeScratchpadTarget.key);
+  private isEditingSavedFeedbackComment(): boolean {
+    return this.isEditingFeedbackComment() && this.activeFeedbackTarget !== null && this.feedbackComments.has(this.activeFeedbackTarget.key);
   }
 
   private diffPaneWidth(): number {
@@ -2435,11 +2435,11 @@ class GadgetUi {
       return lineHeight;
     }
 
-    const key = this.scratchpadMode ? scratchpadCommentKey(line.newLine ?? 0) : reviewCommentKey(file.filePath, line);
-    const savedComment = this.scratchpadMode ? this.scratchpadComments.get(key) : this.reviewComments.get(key);
+    const key = this.feedbackMode ? feedbackCommentKey(line.newLine ?? 0) : reviewCommentKey(file.filePath, line);
+    const savedComment = this.feedbackMode ? this.feedbackComments.get(key) : this.reviewComments.get(key);
     const editingComment = this.mode === "comment" && (
-      this.scratchpadMode
-        ? this.activeScratchpadTarget?.key === key
+      this.feedbackMode
+        ? this.activeFeedbackTarget?.key === key
         : this.activeReviewTarget?.key === key
     );
     if (!savedComment && !editingComment) {
@@ -2482,7 +2482,7 @@ class GadgetUi {
   }
 
   private async toggleFileViewMode(): Promise<void> {
-    if (this.scratchpadMode) {
+    if (this.feedbackMode) {
       this.setStatus("feedback mode");
       return;
     }
@@ -2572,8 +2572,8 @@ class GadgetUi {
   }
 
   private openCommentAtLine(lineIndex: number, cursorIndex?: number): void {
-    if (this.scratchpadMode) {
-      this.openScratchpadCommentAtLine(lineIndex, cursorIndex);
+    if (this.feedbackMode) {
+      this.openFeedbackCommentAtLine(lineIndex, cursorIndex);
       return;
     }
 
@@ -2614,24 +2614,24 @@ class GadgetUi {
     this.renderAll();
   }
 
-  private openScratchpadCommentAtLine(lineIndex: number, cursorIndex?: number): void {
-    const document = this.scratchpadDocument;
+  private openFeedbackCommentAtLine(lineIndex: number, cursorIndex?: number): void {
+    const document = this.feedbackDocument;
     const line = this.selectedLines()[lineIndex];
     const lineNumber = line?.newLine ?? lineIndex + 1;
     if (!document || !line) {
       return;
     }
-    this.saveActiveScratchpadComment();
+    this.saveActiveFeedbackComment();
     this.selectedLineIndex = clamp(lineIndex, 0, Math.max(0, document.lines.length - 1));
     this.closeOverlays();
     this.mode = "comment";
     this.commentCursorVisible = true;
-    const key = scratchpadCommentKey(lineNumber);
-    this.activeScratchpadTarget = {
+    const key = feedbackCommentKey(lineNumber);
+    this.activeFeedbackTarget = {
       key,
       lineNumber,
     };
-    this.input = this.scratchpadComments.get(key)?.value ?? "";
+    this.input = this.feedbackComments.get(key)?.value ?? "";
     this.inputCursorIndex = cursorIndex ?? this.input.length;
     this.inputCursorPreferredColumn = null;
     this.revealSelectedLine = true;
@@ -2647,7 +2647,7 @@ class GadgetUi {
   }
 
   private openFileModal(): void {
-    if (this.scratchpadMode) {
+    if (this.feedbackMode) {
       this.setStatus("feedback mode");
       return;
     }
@@ -2670,7 +2670,7 @@ class GadgetUi {
   }
 
   private async openFileTree(): Promise<void> {
-    if (this.scratchpadMode) {
+    if (this.feedbackMode) {
       this.setStatus("feedback mode");
       return;
     }
@@ -2713,7 +2713,7 @@ class GadgetUi {
   }
 
   private openFileSearchModal(): void {
-    if (this.scratchpadMode) {
+    if (this.feedbackMode) {
       this.setStatus("feedback mode");
       return;
     }
@@ -2750,7 +2750,7 @@ class GadgetUi {
   }
 
   private async openDiffBaseModal(): Promise<void> {
-    if (this.scratchpadMode) {
+    if (this.feedbackMode) {
       this.setStatus("feedback mode");
       return;
     }
@@ -2874,58 +2874,58 @@ class GadgetUi {
     await this.refreshDiffAndRender();
   }
 
-  private openScratchpadTurnModal(turns: AgentScratchpadTurn[]): void {
-    this.scratchpadTurnChoices = turns;
-    this.scratchpadTurnSelectedIndex = 0;
-    this.scratchpadTurnScrollOffset = 0;
-    this.scratchpadTurnModalOpen = true;
-    this.syncScratchpadTurnScroll();
+  private openFeedbackTurnModal(turns: AgentFeedbackTurn[]): void {
+    this.feedbackTurnChoices = turns;
+    this.feedbackTurnSelectedIndex = 0;
+    this.feedbackTurnScrollOffset = 0;
+    this.feedbackTurnModalOpen = true;
+    this.syncFeedbackTurnScroll();
     this.setStatus("select agent turn to reply to");
     this.renderAll();
   }
 
-  private selectScratchpadTurn(index: number): void {
-    if (this.scratchpadTurnChoices.length === 0) {
+  private selectFeedbackTurn(index: number): void {
+    if (this.feedbackTurnChoices.length === 0) {
       return;
     }
-    this.scratchpadTurnSelectedIndex = clamp(index, 0, this.scratchpadTurnChoices.length - 1);
-    this.syncScratchpadTurnScroll();
-    this.renderScratchpadTurnModal();
+    this.feedbackTurnSelectedIndex = clamp(index, 0, this.feedbackTurnChoices.length - 1);
+    this.syncFeedbackTurnScroll();
+    this.renderFeedbackTurnModal();
     this.view?.requestRender();
   }
 
-  private scrollScratchpadTurns(delta: number): void {
-    if (this.scratchpadTurnChoices.length === 0) {
+  private scrollFeedbackTurns(delta: number): void {
+    if (this.feedbackTurnChoices.length === 0) {
       return;
     }
-    const visibleRows = this.scratchpadTurnVisibleRows();
-    this.scratchpadTurnScrollOffset = clamp(this.scratchpadTurnScrollOffset + delta, 0, Math.max(0, this.scratchpadTurnChoices.length - visibleRows));
-    this.scratchpadTurnSelectedIndex = clamp(this.scratchpadTurnSelectedIndex, this.scratchpadTurnScrollOffset, Math.min(this.scratchpadTurnChoices.length - 1, this.scratchpadTurnScrollOffset + visibleRows - 1));
-    this.renderScratchpadTurnModal();
+    const visibleRows = this.feedbackTurnVisibleRows();
+    this.feedbackTurnScrollOffset = clamp(this.feedbackTurnScrollOffset + delta, 0, Math.max(0, this.feedbackTurnChoices.length - visibleRows));
+    this.feedbackTurnSelectedIndex = clamp(this.feedbackTurnSelectedIndex, this.feedbackTurnScrollOffset, Math.min(this.feedbackTurnChoices.length - 1, this.feedbackTurnScrollOffset + visibleRows - 1));
+    this.renderFeedbackTurnModal();
     this.view?.requestRender();
   }
 
-  private scratchpadTurnVisibleRows(): number {
-    return Math.max(1, Math.min(this.scratchpadTurnChoices.length, MAX_SESSION_CHOICE_ROWS, (this.view?.height ?? 12) - 2 - 2 * FILE_MODAL_MARGIN_Y));
+  private feedbackTurnVisibleRows(): number {
+    return Math.max(1, Math.min(this.feedbackTurnChoices.length, MAX_SESSION_CHOICE_ROWS, (this.view?.height ?? 12) - 2 - 2 * FILE_MODAL_MARGIN_Y));
   }
 
-  private syncScratchpadTurnScroll(): void {
-    const visibleRows = this.scratchpadTurnVisibleRows();
-    if (this.scratchpadTurnSelectedIndex < this.scratchpadTurnScrollOffset) {
-      this.scratchpadTurnScrollOffset = this.scratchpadTurnSelectedIndex;
-    } else if (this.scratchpadTurnSelectedIndex >= this.scratchpadTurnScrollOffset + visibleRows) {
-      this.scratchpadTurnScrollOffset = this.scratchpadTurnSelectedIndex - visibleRows + 1;
+  private syncFeedbackTurnScroll(): void {
+    const visibleRows = this.feedbackTurnVisibleRows();
+    if (this.feedbackTurnSelectedIndex < this.feedbackTurnScrollOffset) {
+      this.feedbackTurnScrollOffset = this.feedbackTurnSelectedIndex;
+    } else if (this.feedbackTurnSelectedIndex >= this.feedbackTurnScrollOffset + visibleRows) {
+      this.feedbackTurnScrollOffset = this.feedbackTurnSelectedIndex - visibleRows + 1;
     }
-    this.scratchpadTurnScrollOffset = clamp(this.scratchpadTurnScrollOffset, 0, Math.max(0, this.scratchpadTurnChoices.length - visibleRows));
+    this.feedbackTurnScrollOffset = clamp(this.feedbackTurnScrollOffset, 0, Math.max(0, this.feedbackTurnChoices.length - visibleRows));
   }
 
-  private startScratchpadFromSelectedTurn(): void {
-    const turn = this.scratchpadTurnChoices[this.scratchpadTurnSelectedIndex];
+  private startFeedbackFromSelectedTurn(): void {
+    const turn = this.feedbackTurnChoices[this.feedbackTurnSelectedIndex];
     if (!turn) {
       return;
     }
-    this.scratchpadTurnModalOpen = false;
-    this.startScratchpadDocument(turn.text);
+    this.feedbackTurnModalOpen = false;
+    this.startFeedbackDocument(turn.text);
   }
 
   private closeOverlays(): void {
@@ -2935,7 +2935,7 @@ class GadgetUi {
     this.diffBaseModalOpen = false;
     this.helpModalOpen = false;
     this.sessionModalOpen = false;
-    this.scratchpadTurnModalOpen = false;
+    this.feedbackTurnModalOpen = false;
   }
 
   private resetInputCursor(): void {
@@ -3190,17 +3190,17 @@ class GadgetUi {
     }
 
     this.reviewMode = true;
-    this.scratchpadMode = false;
-    this.scratchpadDocument = null;
-    this.scratchpadComments.clear();
-    this.activeScratchpadTarget = null;
-    this.scratchpadTurnModalOpen = false;
-    this.scratchpadTurnChoices = [];
+    this.feedbackMode = false;
+    this.feedbackDocument = null;
+    this.feedbackComments.clear();
+    this.activeFeedbackTarget = null;
+    this.feedbackTurnModalOpen = false;
+    this.feedbackTurnChoices = [];
     this.setStatus("review mode");
   }
 
-  private async enterScratchpadMode(): Promise<void> {
-    if (this.scratchpadMode) {
+  private async enterFeedbackMode(): Promise<void> {
+    if (this.feedbackMode) {
       this.setStatus("feedback mode");
       this.renderStatus();
       return;
@@ -3210,14 +3210,14 @@ class GadgetUi {
     this.reviewMode = false;
     this.reviewComments.clear();
     this.activeReviewTarget = null;
-    this.scratchpadMode = true;
-    this.scratchpadDocument = null;
-    this.scratchpadComments.clear();
-    this.activeScratchpadTarget = null;
-    this.scratchpadTurnModalOpen = false;
-    this.scratchpadTurnChoices = [];
-    this.scratchpadTurnSelectedIndex = 0;
-    this.scratchpadTurnScrollOffset = 0;
+    this.feedbackMode = true;
+    this.feedbackDocument = null;
+    this.feedbackComments.clear();
+    this.activeFeedbackTarget = null;
+    this.feedbackTurnModalOpen = false;
+    this.feedbackTurnChoices = [];
+    this.feedbackTurnSelectedIndex = 0;
+    this.feedbackTurnScrollOffset = 0;
     this.input = "";
     this.resetInputCursor();
     this.closeOverlays();
@@ -3225,10 +3225,10 @@ class GadgetUi {
 
     let text: string | null = null;
     try {
-      const turns = await this.adapter.getScratchpadTurns?.() ?? [];
+      const turns = await this.adapter.getFeedbackTurns?.() ?? [];
       const nonEmptyTurns = turns.filter((turn) => turn.text.trim().length > 0);
       if (nonEmptyTurns.length > 1) {
-        this.openScratchpadTurnModal(nonEmptyTurns);
+        this.openFeedbackTurnModal(nonEmptyTurns);
         return;
       }
       text = nonEmptyTurns[0]?.text ?? null;
@@ -3237,18 +3237,18 @@ class GadgetUi {
     }
     if (!text) {
       try {
-        text = await this.adapter.getScratchpadText?.() ?? null;
+        text = await this.adapter.getFeedbackText?.() ?? null;
       } catch (error) {
         this.setStatus(`feedback autofill failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
     if (text?.trim()) {
-      this.startScratchpadDocument(text);
+      this.startFeedbackDocument(text);
       return;
     }
 
-    this.mode = "scratchpad-content";
+    this.mode = "feedback-content";
     this.setStatus("feedback content");
     this.renderAll();
   }
@@ -3265,14 +3265,14 @@ class GadgetUi {
     this.renderAll();
   }
 
-  private cancelScratchpad(): void {
-    const count = this.scratchpadComments.size;
-    this.scratchpadMode = false;
-    this.scratchpadDocument = null;
-    this.scratchpadComments.clear();
-    this.activeScratchpadTarget = null;
-    this.scratchpadTurnModalOpen = false;
-    this.scratchpadTurnChoices = [];
+  private cancelFeedback(): void {
+    const count = this.feedbackComments.size;
+    this.feedbackMode = false;
+    this.feedbackDocument = null;
+    this.feedbackComments.clear();
+    this.activeFeedbackTarget = null;
+    this.feedbackTurnModalOpen = false;
+    this.feedbackTurnChoices = [];
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();
@@ -3281,8 +3281,8 @@ class GadgetUi {
   }
 
   private saveActiveAnnotationComment(): void {
-    if (this.scratchpadMode) {
-      this.saveActiveScratchpadComment();
+    if (this.feedbackMode) {
+      this.saveActiveFeedbackComment();
       return;
     }
     this.saveActiveReviewComment();
@@ -3313,25 +3313,25 @@ class GadgetUi {
     this.renderAll();
   }
 
-  private saveActiveScratchpadComment(): void {
-    if (!this.scratchpadMode || this.mode !== "comment" || !this.activeScratchpadTarget) {
+  private saveActiveFeedbackComment(): void {
+    if (!this.feedbackMode || this.mode !== "comment" || !this.activeFeedbackTarget) {
       return;
     }
 
     const value = this.input.trim();
     if (value.length === 0) {
-      this.scratchpadComments.delete(this.activeScratchpadTarget.key);
+      this.feedbackComments.delete(this.activeFeedbackTarget.key);
       this.setStatus("comment removed");
     } else {
-      this.scratchpadComments.set(this.activeScratchpadTarget.key, {
-        ...this.activeScratchpadTarget,
+      this.feedbackComments.set(this.activeFeedbackTarget.key, {
+        ...this.activeFeedbackTarget,
         value,
         savedAt: Date.now(),
       });
-      this.setStatus(`saved ${this.scratchpadComments.size} feedback ${pluralize("comment", this.scratchpadComments.size)}`);
+      this.setStatus(`saved ${this.feedbackComments.size} feedback ${pluralize("comment", this.feedbackComments.size)}`);
     }
 
-    this.activeScratchpadTarget = null;
+    this.activeFeedbackTarget = null;
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();
@@ -3347,8 +3347,8 @@ class GadgetUi {
     this.renderAll();
   }
 
-  private cancelActiveScratchpadEdit(): void {
-    this.activeScratchpadTarget = null;
+  private cancelActiveFeedbackEdit(): void {
+    this.activeFeedbackTarget = null;
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();
@@ -3373,16 +3373,16 @@ class GadgetUi {
     this.renderAll();
   }
 
-  private deleteActiveScratchpadComment(): void {
-    if (!this.scratchpadMode || this.mode !== "comment" || !this.activeScratchpadTarget) {
+  private deleteActiveFeedbackComment(): void {
+    if (!this.feedbackMode || this.mode !== "comment" || !this.activeFeedbackTarget) {
       return;
     }
-    if (!this.scratchpadComments.has(this.activeScratchpadTarget.key)) {
+    if (!this.feedbackComments.has(this.activeFeedbackTarget.key)) {
       return;
     }
 
-    this.scratchpadComments.delete(this.activeScratchpadTarget.key);
-    this.activeScratchpadTarget = null;
+    this.feedbackComments.delete(this.activeFeedbackTarget.key);
+    this.activeFeedbackTarget = null;
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();
@@ -3391,8 +3391,8 @@ class GadgetUi {
   }
 
   private deleteActiveAnnotationComment(): void {
-    if (this.scratchpadMode) {
-      this.deleteActiveScratchpadComment();
+    if (this.feedbackMode) {
+      this.deleteActiveFeedbackComment();
       return;
     }
     this.deleteActiveReviewComment();
@@ -3440,20 +3440,20 @@ class GadgetUi {
     this.renderAll();
   }
 
-  private async completeScratchpad(): Promise<void> {
-    if (!this.scratchpadMode) {
+  private async completeFeedback(): Promise<void> {
+    if (!this.feedbackMode) {
       return;
     }
-    if (this.mode === "scratchpad-content") {
-      this.saveScratchpadContent(this.input);
+    if (this.mode === "feedback-content") {
+      this.saveFeedbackContent(this.input);
       return;
     }
-    if (this.isEditingScratchpadComment()) {
+    if (this.isEditingFeedbackComment()) {
       this.setStatus("save or cancel the active comment first");
       return;
     }
-    if (!this.scratchpadDocument) {
-      this.mode = "scratchpad-content";
+    if (!this.feedbackDocument) {
+      this.mode = "feedback-content";
       this.input = "";
       this.resetInputCursor();
       this.setStatus("feedback content");
@@ -3461,7 +3461,7 @@ class GadgetUi {
       return;
     }
 
-    const drafts = [...this.scratchpadComments.values()].sort((left, right) => left.savedAt - right.savedAt);
+    const drafts = [...this.feedbackComments.values()].sort((left, right) => left.savedAt - right.savedAt);
     if (drafts.length === 0) {
       this.setStatus("feedback has no comments");
       this.renderAll();
@@ -3474,16 +3474,16 @@ class GadgetUi {
       return;
     }
 
-    const prompt = formatScratchpadPrompt(this.scratchpadDocument, drafts);
+    const prompt = formatFeedbackPrompt(this.feedbackDocument, drafts);
     this.setStatus(`${this.adapter.label === "clipboard" ? "copying" : "sending"} ${drafts.length} feedback ${pluralize("comment", drafts.length)}`);
     try {
       await this.adapter.sendPrompt(prompt);
-      this.scratchpadMode = false;
-      this.scratchpadDocument = null;
-      this.scratchpadComments.clear();
-      this.activeScratchpadTarget = null;
-      this.scratchpadTurnModalOpen = false;
-      this.scratchpadTurnChoices = [];
+      this.feedbackMode = false;
+      this.feedbackDocument = null;
+      this.feedbackComments.clear();
+      this.activeFeedbackTarget = null;
+      this.feedbackTurnModalOpen = false;
+      this.feedbackTurnChoices = [];
       this.mode = "none";
       this.input = "";
       this.resetInputCursor();
@@ -3494,22 +3494,22 @@ class GadgetUi {
     this.renderAll();
   }
 
-  private saveScratchpadContent(value: string): void {
+  private saveFeedbackContent(value: string): void {
     if (value.trim().length === 0) {
       this.setStatus("feedback content is empty");
       this.renderAll();
       return;
     }
 
-    this.startScratchpadDocument(value);
+    this.startFeedbackDocument(value);
   }
 
-  private startScratchpadDocument(value: string): void {
-    this.scratchpadDocument = createScratchpadDocument(value);
-    this.scratchpadComments.clear();
-    this.activeScratchpadTarget = null;
-    this.scratchpadTurnModalOpen = false;
-    this.scratchpadTurnChoices = [];
+  private startFeedbackDocument(value: string): void {
+    this.feedbackDocument = createFeedbackDocument(value);
+    this.feedbackComments.clear();
+    this.activeFeedbackTarget = null;
+    this.feedbackTurnModalOpen = false;
+    this.feedbackTurnChoices = [];
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();
@@ -3518,7 +3518,7 @@ class GadgetUi {
     this.revealSelectedLine = true;
     this.pinSelectedLineToTop = true;
     this.centerSelectedLineInViewport = false;
-    this.setStatus(`feedback loaded ${this.scratchpadDocument.lines.length} ${pluralize("line", this.scratchpadDocument.lines.length)}`);
+    this.setStatus(`feedback loaded ${this.feedbackDocument.lines.length} ${pluralize("line", this.feedbackDocument.lines.length)}`);
     this.renderAll();
   }
 
@@ -3534,8 +3534,8 @@ class GadgetUi {
   }
 
   private selectedFile(): DiffFile | null {
-    if (this.scratchpadMode && this.scratchpadDocument) {
-      return scratchpadDocumentToDiffFile(this.scratchpadDocument);
+    if (this.feedbackMode && this.feedbackDocument) {
+      return feedbackDocumentToDiffFile(this.feedbackDocument);
     }
     if (this.continuousDiffActive()) {
       const line = this.selectedLines()[this.selectedLineIndex];
@@ -3552,8 +3552,8 @@ class GadgetUi {
   }
 
   private selectedLines(): DiffLineRef[] {
-    if (this.scratchpadMode && this.scratchpadDocument) {
-      return scratchpadDocumentToDiffFile(this.scratchpadDocument).lines;
+    if (this.feedbackMode && this.feedbackDocument) {
+      return feedbackDocumentToDiffFile(this.feedbackDocument).lines;
     }
     if (this.continuousDiffActive()) {
       return this.continuousDiffLines();
@@ -3569,7 +3569,7 @@ class GadgetUi {
   }
 
   private continuousDiffActive(): boolean {
-    return this.diffViewConfig === "continuous" && this.fileViewMode === "diff" && !this.scratchpadMode;
+    return this.diffViewConfig === "continuous" && this.fileViewMode === "diff" && !this.feedbackMode;
   }
 
   private shouldReturnToConfiguredDiffView(file: DiffFile): boolean {

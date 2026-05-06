@@ -19,7 +19,7 @@ export type MainInputAction =
   | { type: "chooseDiffBase" }
   | { type: "openHelp" }
   | { type: "openSession" }
-  | { type: "replyAgentTurn" }
+  | { type: "openFeedback" }
   | { type: "toggleFileView" }
   | { type: "selectFile"; index: number };
 
@@ -106,7 +106,7 @@ export function mainActionFromRaw(sequence: string): MainInputAction | null {
     case "s":
       return { type: "openSession" };
     case "R":
-      return { type: "replyAgentTurn" };
+      return { type: "openFeedback" };
     case "o":
       return { type: "toggleFileView" };
     default:
@@ -125,7 +125,7 @@ export function mainActionFromKey(key: KeyEvent): MainInputAction | null {
     return { type: "toggleFileTree" };
   }
   if ((key.shift && key.name === "r") || key.sequence === "R") {
-    return { type: "replyAgentTurn" };
+    return { type: "openFeedback" };
   }
   if ((key.shift && key.name === "g") || key.sequence === "G") {
     return { type: "lastLine" };

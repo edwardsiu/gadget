@@ -1,5 +1,5 @@
 import { MouseButton, StyledText, TextRenderable, type CliRenderer, type TextChunk } from "@opentui/core";
-import type { AgentScratchpadTurn } from "../types";
+import type { AgentFeedbackTurn } from "../types";
 import {
   COLORS,
   DIFF_BORDER_FG,
@@ -9,17 +9,17 @@ import {
 } from "./theme";
 import { appendPlainChunk, appendStyledChunk, truncateMiddle, truncateToWidth } from "./text";
 
-const SCRATCHPAD_TURN_MODAL_WIDTH = 78;
-const SCRATCHPAD_TURN_MODAL_MIN_HEIGHT = 5;
-const SCRATCHPAD_TURN_MODAL_MAX_ROWS = 10;
+const FEEDBACK_TURN_MODAL_WIDTH = 78;
+const FEEDBACK_TURN_MODAL_MIN_HEIGHT = 5;
+const FEEDBACK_TURN_MODAL_MAX_ROWS = 10;
 
-type ScratchpadTurnRow = {
+type FeedbackTurnRow = {
   shortcut: string;
   label: string;
   preview: string;
 };
 
-export class ScratchpadTurnModal {
+export class FeedbackTurnModal {
   readonly renderable: TextRenderable;
 
   private scrollOffset = 0;
@@ -34,7 +34,7 @@ export class ScratchpadTurnModal {
     } = {},
   ) {
     this.renderable = new TextRenderable(renderer, {
-      id: "gadget-scratchpad-turn-modal",
+      id: "gadget-feedback-turn-modal",
       position: "absolute",
       zIndex: 113,
       top: 0,
@@ -73,7 +73,7 @@ export class ScratchpadTurnModal {
 
   render(options: {
     open: boolean;
-    turns: AgentScratchpadTurn[];
+    turns: AgentFeedbackTurn[];
     selectedIndex: number;
     scrollOffset: number;
     rendererWidth: number;
@@ -86,7 +86,7 @@ export class ScratchpadTurnModal {
       return;
     }
 
-    const rows = scratchpadTurnRows(options.turns);
+    const rows = feedbackTurnRows(options.turns);
     const width = this.width(options.rendererWidth);
     const height = this.height(rows.length, options.rendererHeight);
     this.visibleRowCount = Math.max(1, height - 2);
@@ -94,7 +94,7 @@ export class ScratchpadTurnModal {
     this.renderable.height = height;
     this.renderable.left = centeredOffset(options.rendererWidth, width);
     this.renderable.top = centeredOffset(options.rendererHeight, height);
-    this.renderable.content = formatScratchpadTurnModal(rows, width, height, options.scrollOffset, options.selectedIndex);
+    this.renderable.content = formatFeedbackTurnModal(rows, width, height, options.scrollOffset, options.selectedIndex);
   }
 
   renderedHeight(rowCount: number, rendererHeight: number): number {
@@ -107,17 +107,17 @@ export class ScratchpadTurnModal {
 
   private width(rendererWidth: number): number {
     const maxWidth = Math.max(12, rendererWidth - FILE_MODAL_MARGIN_X * 2);
-    return Math.min(maxWidth, SCRATCHPAD_TURN_MODAL_WIDTH);
+    return Math.min(maxWidth, FEEDBACK_TURN_MODAL_WIDTH);
   }
 
   private height(rowCount: number, rendererHeight: number): number {
-    const maxHeight = Math.max(SCRATCHPAD_TURN_MODAL_MIN_HEIGHT, rendererHeight - FILE_MODAL_MARGIN_Y * 2);
-    const visibleRows = Math.min(SCRATCHPAD_TURN_MODAL_MAX_ROWS, Math.max(1, rowCount));
-    return Math.min(maxHeight, Math.max(SCRATCHPAD_TURN_MODAL_MIN_HEIGHT, visibleRows + 2));
+    const maxHeight = Math.max(FEEDBACK_TURN_MODAL_MIN_HEIGHT, rendererHeight - FILE_MODAL_MARGIN_Y * 2);
+    const visibleRows = Math.min(FEEDBACK_TURN_MODAL_MAX_ROWS, Math.max(1, rowCount));
+    return Math.min(maxHeight, Math.max(FEEDBACK_TURN_MODAL_MIN_HEIGHT, visibleRows + 2));
   }
 }
 
-function scratchpadTurnRows(turns: AgentScratchpadTurn[]): ScratchpadTurnRow[] {
+function feedbackTurnRows(turns: AgentFeedbackTurn[]): FeedbackTurnRow[] {
   return turns.map((turn, index) => ({
     shortcut: quickSelectLabel(index),
     label: turn.label,
@@ -125,22 +125,22 @@ function scratchpadTurnRows(turns: AgentScratchpadTurn[]): ScratchpadTurnRow[] {
   }));
 }
 
-function formatScratchpadTurnModal(rows: ScratchpadTurnRow[], width: number, height: number, scrollOffset: number, selectedIndex: number): StyledText {
+function formatFeedbackTurnModal(rows: FeedbackTurnRow[], width: number, height: number, scrollOffset: number, selectedIndex: number): StyledText {
   const chunks: TextChunk[] = [];
   const innerWidth = Math.max(1, width - 2);
   const visibleRows = Math.max(1, height - 2);
-  appendScratchpadTurnModalTopBorder(chunks, innerWidth);
+  appendFeedbackTurnModalTopBorder(chunks, innerWidth);
   for (let rowIndex = 0; rowIndex < visibleRows; rowIndex += 1) {
     appendPlainChunk(chunks, "\n");
     const sourceIndex = scrollOffset + rowIndex;
-    appendScratchpadTurnModalLine(chunks, rows[sourceIndex] ?? null, innerWidth, sourceIndex === selectedIndex);
+    appendFeedbackTurnModalLine(chunks, rows[sourceIndex] ?? null, innerWidth, sourceIndex === selectedIndex);
   }
   appendPlainChunk(chunks, "\n");
-  appendScratchpadTurnModalBottomBorder(chunks, innerWidth);
+  appendFeedbackTurnModalBottomBorder(chunks, innerWidth);
   return new StyledText(chunks);
 }
 
-function appendScratchpadTurnModalTopBorder(chunks: TextChunk[], width: number): void {
+function appendFeedbackTurnModalTopBorder(chunks: TextChunk[], width: number): void {
   const title = " Select Agent Turn ";
   appendStyledChunk(chunks, NAV_BORDER.topLeft, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
   if (title.length + 1 > width) {
@@ -153,7 +153,7 @@ function appendScratchpadTurnModalTopBorder(chunks: TextChunk[], width: number):
   appendStyledChunk(chunks, `${NAV_BORDER.horizontal.repeat(Math.max(0, width - title.length - 1))}${NAV_BORDER.topRight}`, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
 }
 
-function appendScratchpadTurnModalBottomBorder(chunks: TextChunk[], width: number): void {
+function appendFeedbackTurnModalBottomBorder(chunks: TextChunk[], width: number): void {
   const hint = " Select [Enter] | Cancel [Esc] ";
   appendStyledChunk(chunks, NAV_BORDER.bottomLeft, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
   if (hint.length > width) {
@@ -166,7 +166,7 @@ function appendScratchpadTurnModalBottomBorder(chunks: TextChunk[], width: numbe
   appendStyledChunk(chunks, NAV_BORDER.bottomRight, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
 }
 
-function appendScratchpadTurnModalLine(chunks: TextChunk[], row: ScratchpadTurnRow | null, width: number, selected: boolean): void {
+function appendFeedbackTurnModalLine(chunks: TextChunk[], row: FeedbackTurnRow | null, width: number, selected: boolean): void {
   const contentWidth = Math.max(1, width - 2);
   const content = row ? formatTurnValue(row, contentWidth) : "";
   const paddingWidth = Math.max(0, width - content.length - 2);
@@ -179,7 +179,7 @@ function appendScratchpadTurnModalLine(chunks: TextChunk[], row: ScratchpadTurnR
   appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: DIFF_BORDER_FG, bg: COLORS.panel });
 }
 
-function formatTurnValue(row: ScratchpadTurnRow, width: number): string {
+function formatTurnValue(row: FeedbackTurnRow, width: number): string {
   const prefix = `[${row.shortcut}] ${row.label}`;
   if (!row.preview) {
     return truncateToWidth(prefix, width);

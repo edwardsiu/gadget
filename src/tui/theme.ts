@@ -54,7 +54,7 @@ export const HELP_MODAL_ROWS = [
   "B            Choose diff base",
   "O            Toggle full file",
   "Enter        Comment",
-  "Shift+R      Reply agent turn",
+  "Shift+R      Feedback",
   "S            Session info",
   "?            Keybindings",
   "Shift+Q      Quit",

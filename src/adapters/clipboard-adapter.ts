@@ -16,7 +16,7 @@ export class ClipboardAdapter implements AgentAdapter {
     this.status = "copied prompt";
   }
 
-  async getScratchpadText(): Promise<string | null> {
+  async getFeedbackText(): Promise<string | null> {
     return await readClipboard();
   }
 

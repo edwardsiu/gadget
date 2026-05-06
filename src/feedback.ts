@@ -1,62 +1,62 @@
 import type { DiffFile, DiffLineRef } from "./types";
 
-export type ScratchpadLine = {
+export type FeedbackLine = {
   id: string;
   lineNumber: number;
   text: string;
 };
 
-export type ScratchpadDocument = {
+export type FeedbackDocument = {
   id: string;
   title: string;
   text: string;
-  lines: ScratchpadLine[];
+  lines: FeedbackLine[];
 };
 
-export type ScratchpadCommentDraft = {
+export type FeedbackCommentDraft = {
   key: string;
   lineNumber: number;
   value: string;
   savedAt: number;
 };
 
-export function createScratchpadDocument(text: string, title = "Feedback"): ScratchpadDocument {
+export function createFeedbackDocument(text: string, title = "Feedback"): FeedbackDocument {
   const normalizedText = text.replace(/\r\n?/g, "\n");
   const rawLines = normalizedText.length === 0 ? [] : normalizedText.split("\n");
   return {
-    id: `scratchpad_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    id: `feedback_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     title,
     text: normalizedText,
     lines: rawLines.map((line, index) => ({
-      id: `scratchpad-line-${index + 1}`,
+      id: `feedback-line-${index + 1}`,
       lineNumber: index + 1,
       text: line,
     })),
   };
 }
 
-export function scratchpadDocumentToDiffFile(document: ScratchpadDocument): DiffFile {
+export function feedbackDocumentToDiffFile(document: FeedbackDocument): DiffFile {
   return {
     filePath: document.title,
     additions: 0,
     removals: 0,
     rawDiff: document.text,
-    lines: document.lines.map(scratchpadLineToDiffLine),
+    lines: document.lines.map(feedbackLineToDiffLine),
   };
 }
 
-export function formatScratchpadPrompt(document: ScratchpadDocument, drafts: ScratchpadCommentDraft[]): string {
+export function formatFeedbackPrompt(document: FeedbackDocument, drafts: FeedbackCommentDraft[]): string {
   return [...drafts]
     .sort((left, right) => left.savedAt - right.savedAt)
-    .map((draft) => formatScratchpadPromptSection(document, draft))
+    .map((draft) => formatFeedbackPromptSection(document, draft))
     .join("\n\n");
 }
 
-export function scratchpadCommentKey(lineNumber: number): string {
-  return `scratchpad:${lineNumber}`;
+export function feedbackCommentKey(lineNumber: number): string {
+  return `feedback:${lineNumber}`;
 }
 
-function scratchpadLineToDiffLine(line: ScratchpadLine): DiffLineRef {
+function feedbackLineToDiffLine(line: FeedbackLine): DiffLineRef {
   return {
     id: line.id,
     filePath: "Feedback",
@@ -69,7 +69,7 @@ function scratchpadLineToDiffLine(line: ScratchpadLine): DiffLineRef {
   };
 }
 
-function formatScratchpadPromptSection(document: ScratchpadDocument, draft: ScratchpadCommentDraft): string {
+function formatFeedbackPromptSection(document: FeedbackDocument, draft: FeedbackCommentDraft): string {
   const currentLine = document.lines[draft.lineNumber - 1]?.text ?? "";
   const quotedLine = currentLine.length > 0 ? `> ${currentLine}` : ">";
   return `${quotedLine}\n${draft.value}`;

@@ -1,4 +1,4 @@
-import type { AgentAdapter, AgentComment, AgentScratchpadTurn, AgentSessionInfo } from "../types";
+import type { AgentAdapter, AgentComment, AgentFeedbackTurn, AgentSessionInfo } from "../types";
 import { formatCommentPrompt } from "../comments";
 import type { GadgetPiSessionRecord } from "../session-registry";
 
@@ -8,7 +8,7 @@ type BridgeResponse = {
   ok?: boolean;
   status?: string;
   text?: string | null;
-  turns?: AgentScratchpadTurn[];
+  turns?: AgentFeedbackTurn[];
   error?: string;
 };
 
@@ -32,13 +32,13 @@ export class PiBridgeAdapter implements AgentAdapter {
     this.status = response.status ?? `sent to ${this.session.name}`;
   }
 
-  async getScratchpadText(): Promise<string | null> {
-    const response = await this.request("/scratchpad", { method: "GET" });
+  async getFeedbackText(): Promise<string | null> {
+    const response = await this.request("/feedback", { method: "GET" });
     return response.text ?? null;
   }
 
-  async getScratchpadTurns(): Promise<AgentScratchpadTurn[]> {
-    const response = await this.request("/scratchpad/turns", { method: "GET" });
+  async getFeedbackTurns(): Promise<AgentFeedbackTurn[]> {
+    const response = await this.request("/feedback/turns", { method: "GET" });
     return Array.isArray(response.turns) ? response.turns : [];
   }
 

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
-import type { AgentAdapter, AgentComment, AgentScratchpadTurn, AgentSessionInfo } from "../types";
+import type { AgentAdapter, AgentComment, AgentFeedbackTurn, AgentSessionInfo } from "../types";
 import { formatCommentPrompt } from "../comments";
 import { readGitInfo } from "../git";
 import { isGadgetCmuxSessionRecord, isGadgetCodexSessionRecord, isGadgetPiSessionRecord, readSessionRegistry, writeSessionRegistry, type GadgetCodexSessionRecord, type GadgetPiSessionRecord, type GadgetSessionRecord } from "../session-registry";
@@ -128,7 +128,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     this.status = this.activeTurnId ? `turn started ${this.activeTurnId}` : `turn ${response.turn.status}`;
   }
 
-  async getScratchpadText(): Promise<string | null> {
+  async getFeedbackText(): Promise<string | null> {
     await this.connect();
     if (!this.client || !this.threadId) {
       return null;
@@ -139,7 +139,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     return agentMessageChoices(thread)[0]?.text ?? null;
   }
 
-  async getScratchpadTurns(): Promise<AgentScratchpadTurn[]> {
+  async getFeedbackTurns(): Promise<AgentFeedbackTurn[]> {
     await this.connect();
     if (!this.client || !this.threadId) {
       return [];
@@ -450,10 +450,10 @@ function toLiveSession(session: GadgetCodexSession & { threadId: string }, threa
   };
 }
 
-function agentMessageChoices(thread: unknown): AgentScratchpadTurn[] {
+function agentMessageChoices(thread: unknown): AgentFeedbackTurn[] {
   const threadRecord = recordValue(thread);
   const turns = Array.isArray(threadRecord?.turns) ? threadRecord.turns : [];
-  const choices: AgentScratchpadTurn[] = [];
+  const choices: AgentFeedbackTurn[] = [];
 
   for (const turnValue of turns) {
     const turn = recordValue(turnValue);
