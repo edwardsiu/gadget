@@ -487,8 +487,7 @@ class GadgetUi {
           this.renderCommentInputChange();
         }
         return;
-      case "submit": {
-        const value = this.input.trim();
+      case "submit":
         const mode = this.mode;
         if (mode === "comment" && this.reviewMode) {
           this.saveActiveAnnotationComment();
@@ -500,20 +499,8 @@ class GadgetUi {
         }
         if (mode === "scratchpad-content") {
           this.saveScratchpadContent(this.input);
-          return;
-        }
-        this.mode = "none";
-        this.input = "";
-        this.resetInputCursor();
-        if (!value) {
-          this.renderAll();
-          return;
-        }
-        if (mode === "comment") {
-          await this.submitComment(value);
         }
         return;
-      }
     }
   }
 
@@ -632,9 +619,6 @@ class GadgetUi {
         return;
       case "toggleFileView":
         await this.toggleFileViewMode();
-        return;
-      case "startReview":
-        this.enterReviewMode();
         return;
       case "selectFile":
         this.selectFile(action.index);
@@ -1167,33 +1151,6 @@ class GadgetUi {
           this.inlineCommentHeightRows = commentBox.height;
         }
         renderedRows += commentBox.height;
-      } else if (selected && this.mode === "comment") {
-        const commentWidth = this.diffPaneWidth();
-        const commentBox = createInlineCommentBox({
-          renderer: view.renderer,
-          value: this.input,
-          width: commentWidth,
-          submitLabel: this.activeCommentSubmitLabel(),
-          cursorVisible: this.commentCursorVisible,
-          cursorIndex: this.inputCursorIndex,
-        });
-        const handleCommentClick = (event: MouseEvent) => {
-          if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
-            return;
-          }
-          this.setInputCursor(this.commentCursorIndexFromMouse(event, this.input, commentBox.text));
-        };
-        commentBox.box.onMouseDown = (event) => {
-          handleCommentClick(event);
-        };
-        commentBox.text.onMouseDown = (event) => {
-          handleCommentClick(event);
-        };
-        view.diffScroll.add(commentBox.box);
-        this.lineIds.push(commentBox.box.id);
-        this.inlineCommentText = commentBox.text;
-        this.inlineCommentHeightRows = commentBox.height;
-        renderedRows += commentBox.height;
       }
     });
 
@@ -1408,7 +1365,7 @@ class GadgetUi {
     this.inlineCommentText.content = formatInlineComment(
       this.input,
       this.diffPaneWidth(),
-      this.activeCommentSubmitLabel(),
+      "Save",
       true,
       this.isEditingSavedReviewComment() || this.isEditingSavedScratchpadComment(),
       this.commentCursorVisible,
@@ -2526,10 +2483,9 @@ class GadgetUi {
       return;
     }
 
-    const file = this.selectedFile();
     const lines = this.selectedLines();
     const line = lines[lineIndex];
-    if (!file || !line) {
+    if (!line) {
       return;
     }
     if (line.kind === "file") {
@@ -2539,26 +2495,25 @@ class GadgetUi {
       this.renderAll();
       return;
     }
-    if (this.mode === "comment" && !this.reviewMode) {
+    this.ensureReviewMode();
+    this.saveActiveReviewComment();
+    this.selectedLineIndex = clamp(lineIndex, 0, Math.max(0, lines.length - 1));
+    this.syncSelectedFileToSelectedLine();
+    const file = this.fileForPath(line.filePath) ?? this.selectedFile();
+    if (!file) {
       return;
     }
-    this.saveActiveAnnotationComment();
-    this.selectedLineIndex = clamp(lineIndex, 0, Math.max(0, lines.length - 1));
     this.closeOverlays();
     this.mode = "comment";
     this.commentCursorVisible = true;
-    if (this.reviewMode) {
-      const key = reviewCommentKey(file.filePath, line);
-      this.activeReviewTarget = {
-        key,
-        file,
-        line,
-        includeHunk: this.fileViewMode === "diff",
-      };
-      this.input = this.reviewComments.get(key)?.value ?? "";
-    } else {
-      this.input = "";
-    }
+    const key = reviewCommentKey(file.filePath, line);
+    this.activeReviewTarget = {
+      key,
+      file,
+      line,
+      includeHunk: this.fileViewMode === "diff",
+    };
+    this.input = this.reviewComments.get(key)?.value ?? "";
     this.inputCursorIndex = cursorIndex ?? this.input.length;
     this.inputCursorPreferredColumn = null;
     this.revealSelectedLine = true;
@@ -2826,13 +2781,6 @@ class GadgetUi {
     this.sessionModalOpen = false;
   }
 
-  private activeCommentSubmitLabel(): string {
-    if (this.reviewMode || this.scratchpadMode) {
-      return "Save";
-    }
-    return this.adapter.label === "clipboard" ? "Copy" : "Submit";
-  }
-
   private resetInputCursor(): void {
     this.inputCursorIndex = 0;
     this.inputCursorPreferredColumn = null;
@@ -3076,26 +3024,17 @@ class GadgetUi {
     }
   }
 
-  private enterReviewMode(): void {
+  private ensureReviewMode(): void {
     if (this.reviewMode) {
-      this.setStatus("review mode");
-      this.renderStatus();
       return;
     }
 
-    this.saveActiveAnnotationComment();
     this.reviewMode = true;
     this.scratchpadMode = false;
     this.scratchpadDocument = null;
     this.scratchpadComments.clear();
     this.activeScratchpadTarget = null;
-    this.mode = "none";
-    this.input = "";
-    this.resetInputCursor();
-    this.activeReviewTarget = null;
-    this.closeOverlays();
     this.setStatus("review mode");
-    this.renderAll();
   }
 
   private async enterScratchpadMode(): Promise<void> {
@@ -3407,28 +3346,6 @@ class GadgetUi {
     for (const comment of comments) {
       await this.adapter.sendComment(comment);
     }
-  }
-
-  private async submitComment(value: string): Promise<void> {
-    const file = this.selectedFile();
-    const line = this.selectedLine();
-    if (!file || !line) {
-      return;
-    }
-
-    const comment = createComment(this.cwd, file, line, value, { includeHunk: this.fileViewMode === "diff" });
-    this.setStatus(`${this.adapter.label === "clipboard" ? "copying" : "sending"} comment for ${file.filePath}`);
-    try {
-      await this.adapter.sendComment(comment);
-      comment.status = this.adapter.label === "clipboard" ? "copied" : "sent";
-      comment.delivery = this.adapter.label;
-      this.setStatus(`${comment.status} comment ${comment.id}`);
-    } catch (error) {
-      comment.status = "failed";
-      comment.error = error instanceof Error ? error.message : String(error);
-      this.setStatus(`send failed: ${comment.error}`);
-    }
-    this.renderAll();
   }
 
   private selectedFile(): DiffFile | null {

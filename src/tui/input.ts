@@ -21,7 +21,6 @@ export type MainInputAction =
   | { type: "openSession" }
   | { type: "replyAgentTurn" }
   | { type: "toggleFileView" }
-  | { type: "startReview" }
   | { type: "selectFile"; index: number };
 
 export type TextInputAction =
@@ -89,7 +88,6 @@ export function mainActionFromRaw(sequence: string): MainInputAction | null {
     case "\u001b[C":
     case "l":
       return { type: "nextFile" };
-    case "c":
     case "\r":
     case "\n":
       return { type: "submitOrComment" };
@@ -111,8 +109,6 @@ export function mainActionFromRaw(sequence: string): MainInputAction | null {
       return { type: "replyAgentTurn" };
     case "o":
       return { type: "toggleFileView" };
-    case "r":
-      return { type: "startReview" };
     default:
       return /^[1-9]$/.test(sequence) ? { type: "selectFile", index: Number(sequence) - 1 } : null;
   }
@@ -163,7 +159,6 @@ export function mainActionFromKey(key: KeyEvent): MainInputAction | null {
     case "right":
     case "l":
       return { type: "nextFile" };
-    case "c":
     case "enter":
     case "return":
       return { type: "submitOrComment" };
@@ -176,8 +171,6 @@ export function mainActionFromKey(key: KeyEvent): MainInputAction | null {
       return { type: "openHelp" };
     case "o":
       return { type: "toggleFileView" };
-    case "r":
-      return { type: "startReview" };
     case "s":
       return { type: "openSession" };
     default:
