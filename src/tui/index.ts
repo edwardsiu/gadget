@@ -1269,7 +1269,7 @@ class GadgetUi {
       width: diffWidth,
       fg: COLORS.muted,
       bg: COLORS.bg,
-      content: formatDiffViewportRow(" Scratchpad content", diffWidth, {
+      content: formatDiffViewportRow(" Feedback content", diffWidth, {
         fg: COLORS.muted,
         bg: COLORS.bg,
       }, hasLeftBorder, borderFg),
@@ -1322,7 +1322,7 @@ class GadgetUi {
       borderFg: this.diffBorderFg(),
       annotationModeLabel: this.annotationModeLabel(),
       bottomDockOpen: this.bottomDockOpen(),
-      fileLabel: this.scratchpadMode ? "Scratchpad" : this.statusFileLabel(file),
+      fileLabel: this.scratchpadMode ? "Feedback" : this.statusFileLabel(file),
       actionHint: this.annotationActionHint(),
     });
   }
@@ -1677,7 +1677,7 @@ class GadgetUi {
       return `Review [${this.reviewCommentCount()}]`;
     }
     if (this.scratchpadMode) {
-      return `Scratchpad [${this.scratchpadCommentCount()}]`;
+      return `Feedback [${this.scratchpadCommentCount()}]`;
     }
     return "";
   }
@@ -2483,7 +2483,7 @@ class GadgetUi {
 
   private async toggleFileViewMode(): Promise<void> {
     if (this.scratchpadMode) {
-      this.setStatus("scratchpad mode");
+      this.setStatus("feedback mode");
       return;
     }
 
@@ -2648,7 +2648,7 @@ class GadgetUi {
 
   private openFileModal(): void {
     if (this.scratchpadMode) {
-      this.setStatus("scratchpad mode");
+      this.setStatus("feedback mode");
       return;
     }
     this.saveActiveAnnotationComment();
@@ -2671,7 +2671,7 @@ class GadgetUi {
 
   private async openFileTree(): Promise<void> {
     if (this.scratchpadMode) {
-      this.setStatus("scratchpad mode");
+      this.setStatus("feedback mode");
       return;
     }
     this.saveActiveAnnotationComment();
@@ -2714,7 +2714,7 @@ class GadgetUi {
 
   private openFileSearchModal(): void {
     if (this.scratchpadMode) {
-      this.setStatus("scratchpad mode");
+      this.setStatus("feedback mode");
       return;
     }
     this.saveActiveAnnotationComment();
@@ -2751,7 +2751,7 @@ class GadgetUi {
 
   private async openDiffBaseModal(): Promise<void> {
     if (this.scratchpadMode) {
-      this.setStatus("scratchpad mode");
+      this.setStatus("feedback mode");
       return;
     }
     this.saveActiveAnnotationComment();
@@ -3201,7 +3201,7 @@ class GadgetUi {
 
   private async enterScratchpadMode(): Promise<void> {
     if (this.scratchpadMode) {
-      this.setStatus("scratchpad mode");
+      this.setStatus("feedback mode");
       this.renderStatus();
       return;
     }
@@ -3221,7 +3221,7 @@ class GadgetUi {
     this.input = "";
     this.resetInputCursor();
     this.closeOverlays();
-    this.setStatus("loading scratchpad");
+    this.setStatus("loading feedback");
 
     let text: string | null = null;
     try {
@@ -3233,13 +3233,13 @@ class GadgetUi {
       }
       text = nonEmptyTurns[0]?.text ?? null;
     } catch (error) {
-      this.setStatus(`scratchpad turn list failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.setStatus(`feedback turn list failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (!text) {
       try {
         text = await this.adapter.getScratchpadText?.() ?? null;
       } catch (error) {
-        this.setStatus(`scratchpad autofill failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.setStatus(`feedback autofill failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
@@ -3249,7 +3249,7 @@ class GadgetUi {
     }
 
     this.mode = "scratchpad-content";
-    this.setStatus("scratchpad content");
+    this.setStatus("feedback content");
     this.renderAll();
   }
 
@@ -3276,7 +3276,7 @@ class GadgetUi {
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();
-    this.setStatus(count > 0 ? `scratchpad canceled (${count} comments)` : "scratchpad canceled");
+    this.setStatus(count > 0 ? `feedback canceled (${count} comments)` : "feedback canceled");
     this.renderAll();
   }
 
@@ -3328,7 +3328,7 @@ class GadgetUi {
         value,
         savedAt: Date.now(),
       });
-      this.setStatus(`saved ${this.scratchpadComments.size} scratchpad ${pluralize("comment", this.scratchpadComments.size)}`);
+      this.setStatus(`saved ${this.scratchpadComments.size} feedback ${pluralize("comment", this.scratchpadComments.size)}`);
     }
 
     this.activeScratchpadTarget = null;
@@ -3456,26 +3456,26 @@ class GadgetUi {
       this.mode = "scratchpad-content";
       this.input = "";
       this.resetInputCursor();
-      this.setStatus("scratchpad content");
+      this.setStatus("feedback content");
       this.renderAll();
       return;
     }
 
     const drafts = [...this.scratchpadComments.values()].sort((left, right) => left.savedAt - right.savedAt);
     if (drafts.length === 0) {
-      this.setStatus("scratchpad has no comments");
+      this.setStatus("feedback has no comments");
       this.renderAll();
       return;
     }
 
     if (!this.adapter.sendPrompt) {
-      this.setStatus("scratchpad submit failed: adapter cannot send prompts");
+      this.setStatus("feedback submit failed: adapter cannot send prompts");
       this.renderAll();
       return;
     }
 
     const prompt = formatScratchpadPrompt(this.scratchpadDocument, drafts);
-    this.setStatus(`${this.adapter.label === "clipboard" ? "copying" : "sending"} ${drafts.length} scratchpad ${pluralize("comment", drafts.length)}`);
+    this.setStatus(`${this.adapter.label === "clipboard" ? "copying" : "sending"} ${drafts.length} feedback ${pluralize("comment", drafts.length)}`);
     try {
       await this.adapter.sendPrompt(prompt);
       this.scratchpadMode = false;
@@ -3487,16 +3487,16 @@ class GadgetUi {
       this.mode = "none";
       this.input = "";
       this.resetInputCursor();
-      this.setStatus(`${this.adapter.label === "clipboard" ? "copied" : "sent"} ${drafts.length} scratchpad ${pluralize("comment", drafts.length)}`);
+      this.setStatus(`${this.adapter.label === "clipboard" ? "copied" : "sent"} ${drafts.length} feedback ${pluralize("comment", drafts.length)}`);
     } catch (error) {
-      this.setStatus(`scratchpad send failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.setStatus(`feedback send failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     this.renderAll();
   }
 
   private saveScratchpadContent(value: string): void {
     if (value.trim().length === 0) {
-      this.setStatus("scratchpad content is empty");
+      this.setStatus("feedback content is empty");
       this.renderAll();
       return;
     }
@@ -3518,7 +3518,7 @@ class GadgetUi {
     this.revealSelectedLine = true;
     this.pinSelectedLineToTop = true;
     this.centerSelectedLineInViewport = false;
-    this.setStatus(`scratchpad loaded ${this.scratchpadDocument.lines.length} ${pluralize("line", this.scratchpadDocument.lines.length)}`);
+    this.setStatus(`feedback loaded ${this.scratchpadDocument.lines.length} ${pluralize("line", this.scratchpadDocument.lines.length)}`);
     this.renderAll();
   }
 

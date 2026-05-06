@@ -20,7 +20,7 @@ export type ScratchpadCommentDraft = {
   savedAt: number;
 };
 
-export function createScratchpadDocument(text: string, title = "Scratchpad"): ScratchpadDocument {
+export function createScratchpadDocument(text: string, title = "Feedback"): ScratchpadDocument {
   const normalizedText = text.replace(/\r\n?/g, "\n");
   const rawLines = normalizedText.length === 0 ? [] : normalizedText.split("\n");
   return {
@@ -59,7 +59,7 @@ export function scratchpadCommentKey(lineNumber: number): string {
 function scratchpadLineToDiffLine(line: ScratchpadLine): DiffLineRef {
   return {
     id: line.id,
-    filePath: "Scratchpad",
+    filePath: "Feedback",
     kind: "context",
     oldLine: null,
     newLine: line.lineNumber,
