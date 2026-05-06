@@ -287,7 +287,7 @@ class GadgetUi {
           this.scrollNav(scrollDirection === "down" ? 1 : -1);
         }
       },
-      onDiffBottomBarMouseDown: () => this.openFileModal(),
+      onDiffBottomBarMouseDown: () => this.toggleFileModal(),
       onDiffScroll: (direction, shift) => {
         if (this.mode === "comment" || !isVerticalScroll(direction, shift)) {
           return;
@@ -2542,6 +2542,14 @@ class GadgetUi {
     this.inputCursorPreferredColumn = null;
     this.revealSelectedLine = true;
     this.renderAll();
+  }
+
+  private toggleFileModal(): void {
+    if (this.fileModalOpen) {
+      this.closeFileModal();
+      return;
+    }
+    this.openFileModal();
   }
 
   private openFileModal(): void {

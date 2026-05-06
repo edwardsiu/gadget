@@ -17,6 +17,7 @@ export class FileSelectorModal {
     private readonly handlers: {
       onSelectFile: (index: number) => void;
       onScroll: (delta: number) => void;
+      onClose: () => void;
     },
   ) {
     this.renderable = new TextRenderable(renderer, {
@@ -37,7 +38,12 @@ export class FileSelectorModal {
         if (event.button !== MouseButton.LEFT) {
           return;
         }
-        const row = event.y - this.renderable.screenY - 1;
+        const relativeY = event.y - this.renderable.screenY;
+        if (relativeY === this.visibleRowCount + 1) {
+          this.handlers.onClose();
+          return;
+        }
+        const row = relativeY - 1;
         const fileIndex = this.scrollOffset + row;
         if (row < 0 || row >= this.visibleRowCount || fileIndex >= this.filesLength) {
           return;

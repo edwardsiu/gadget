@@ -174,6 +174,7 @@ export class GadgetRenderer {
     this.fileSelectorModal = new FileSelectorModal(renderer, {
       onSelectFile: callbacks.onSelectFile,
       onScroll: callbacks.onFileModalScroll,
+      onClose: callbacks.onDiffBottomBarMouseDown,
     });
     this.fileSearchModal = new FileSearchModal(renderer, {
       onSelectMatch: callbacks.onSelectFileSearchMatch,
