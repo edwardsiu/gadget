@@ -74,12 +74,6 @@ After Pi is running, open Gadget from the same git checkout:
 gadget
 ```
 
-If multiple Pi sessions are active for the checkout, Gadget shows a session picker before opening the reviewer. Reinstall the extension after pulling changes that modify `pi-extension`:
-
-```bash
-pi install ./pi-extension
-```
-
 ## Keybindings
 
 ```text
