@@ -216,10 +216,8 @@ class GadgetUi {
   private feedbackDocument: FeedbackDocument | null = null;
   private feedbackComments = new Map<string, FeedbackCommentDraft>();
   private activeFeedbackTarget: FeedbackCommentTarget | null = null;
-  private feedbackTurnModalOpen = false;
   private feedbackTurnChoices: AgentFeedbackTurn[] = [];
   private feedbackTurnSelectedIndex = 0;
-  private feedbackTurnScrollOffset = 0;
   private input = "";
   private inputCursorIndex = 0;
   private inputCursorPreferredColumn: number | null = null;
@@ -316,11 +314,6 @@ class GadgetUi {
         void this.connectSelectedSessionChoice();
       },
       onSessionChoiceScroll: (delta) => this.scrollSessionChoices(delta),
-      onSelectFeedbackTurn: (index) => {
-        this.feedbackTurnSelectedIndex = index;
-        this.startFeedbackFromSelectedTurn();
-      },
-      onFeedbackTurnScroll: (delta) => this.scrollFeedbackTurns(delta),
     });
     this.bindInput();
     this.startCommentCursorTimer();
@@ -390,11 +383,6 @@ class GadgetUi {
 
     if (this.sessionModalOpen) {
       this.handleSessionModalSequence(sequence);
-      return;
-    }
-
-    if (this.feedbackTurnModalOpen) {
-      this.handleFeedbackTurnModalSequence(sequence);
       return;
     }
 
@@ -532,11 +520,6 @@ class GadgetUi {
 
     if (this.sessionModalOpen) {
       this.handleSessionModalKey(key);
-      return;
-    }
-
-    if (this.feedbackTurnModalOpen) {
-      this.handleFeedbackTurnModalKey(key);
       return;
     }
 
@@ -890,58 +873,6 @@ class GadgetUi {
     }
   }
 
-  private handleFeedbackTurnModalSequence(sequence: string): void {
-    const quickSelectIndex = quickSelectIndexFromSequence(sequence, this.feedbackTurnChoices.length);
-    if (quickSelectIndex !== null) {
-      this.feedbackTurnSelectedIndex = quickSelectIndex;
-      this.startFeedbackFromSelectedTurn();
-      return;
-    }
-    this.applyFeedbackTurnModalAction(diffBaseActionFromRaw(sequence));
-  }
-
-  private handleFeedbackTurnModalKey(key: KeyEvent): void {
-    const quickSelectIndex = quickSelectIndexFromSequence(key.sequence, this.feedbackTurnChoices.length);
-    if (quickSelectIndex !== null) {
-      this.feedbackTurnSelectedIndex = quickSelectIndex;
-      this.startFeedbackFromSelectedTurn();
-      return;
-    }
-    this.applyFeedbackTurnModalAction(diffBaseActionFromKey(key));
-  }
-
-  private applyFeedbackTurnModalAction(action: ReturnType<typeof diffBaseActionFromRaw>): void {
-    if (!action) {
-      return;
-    }
-    switch (action.type) {
-      case "forceQuit":
-        this.shutdownNow();
-        return;
-      case "quit":
-        this.shutdownNow();
-        return;
-      case "close":
-        this.cancelFeedback();
-        return;
-      case "up":
-        this.selectFeedbackTurn(this.feedbackTurnSelectedIndex - 1);
-        return;
-      case "down":
-        this.selectFeedbackTurn(this.feedbackTurnSelectedIndex + 1);
-        return;
-      case "pageUp":
-        this.selectFeedbackTurn(this.feedbackTurnSelectedIndex - this.feedbackTurnVisibleRows());
-        return;
-      case "pageDown":
-        this.selectFeedbackTurn(this.feedbackTurnSelectedIndex + this.feedbackTurnVisibleRows());
-        return;
-      case "submit":
-        this.startFeedbackFromSelectedTurn();
-        return;
-    }
-  }
-
   private async connectAdapter(): Promise<void> {
     try {
       await this.adapter.connect?.();
@@ -1033,7 +964,6 @@ class GadgetUi {
     this.renderDiffBaseModal();
     this.renderHelpModal();
     this.renderSessionModal();
-    this.renderFeedbackTurnModal();
     this.view?.requestRender();
   }
 
@@ -1420,18 +1350,6 @@ class GadgetUi {
         }
         : undefined,
     );
-  }
-
-  private renderFeedbackTurnModal(): void {
-    if (!this.view) {
-      return;
-    }
-    this.view.renderFeedbackTurnModal({
-      open: this.feedbackTurnModalOpen,
-      turns: this.feedbackTurnChoices,
-      selectedIndex: this.feedbackTurnSelectedIndex,
-      scrollOffset: this.feedbackTurnScrollOffset,
-    });
   }
 
   private renderCommentInputChange(): void {
@@ -2896,57 +2814,11 @@ class GadgetUi {
     await this.refreshDiffAndRender();
   }
 
-  private openFeedbackTurnModal(turns: AgentFeedbackTurn[]): void {
-    this.feedbackTurnChoices = turns;
-    this.feedbackTurnSelectedIndex = 0;
-    this.feedbackTurnScrollOffset = 0;
-    this.feedbackTurnModalOpen = true;
-    this.syncFeedbackTurnScroll();
-    this.setStatus("select agent turn to reply to");
-    this.renderAll();
-  }
-
-  private selectFeedbackTurn(index: number): void {
-    if (this.feedbackTurnChoices.length === 0) {
-      return;
-    }
-    this.feedbackTurnSelectedIndex = clamp(index, 0, this.feedbackTurnChoices.length - 1);
-    this.syncFeedbackTurnScroll();
-    this.renderFeedbackTurnModal();
-    this.view?.requestRender();
-  }
-
-  private scrollFeedbackTurns(delta: number): void {
-    if (this.feedbackTurnChoices.length === 0) {
-      return;
-    }
-    const visibleRows = this.feedbackTurnVisibleRows();
-    this.feedbackTurnScrollOffset = clamp(this.feedbackTurnScrollOffset + delta, 0, Math.max(0, this.feedbackTurnChoices.length - visibleRows));
-    this.feedbackTurnSelectedIndex = clamp(this.feedbackTurnSelectedIndex, this.feedbackTurnScrollOffset, Math.min(this.feedbackTurnChoices.length - 1, this.feedbackTurnScrollOffset + visibleRows - 1));
-    this.renderFeedbackTurnModal();
-    this.view?.requestRender();
-  }
-
-  private feedbackTurnVisibleRows(): number {
-    return Math.max(1, Math.min(this.feedbackTurnChoices.length, MAX_SESSION_CHOICE_ROWS, (this.view?.height ?? 12) - 2 - 2 * FILE_MODAL_MARGIN_Y));
-  }
-
-  private syncFeedbackTurnScroll(): void {
-    const visibleRows = this.feedbackTurnVisibleRows();
-    if (this.feedbackTurnSelectedIndex < this.feedbackTurnScrollOffset) {
-      this.feedbackTurnScrollOffset = this.feedbackTurnSelectedIndex;
-    } else if (this.feedbackTurnSelectedIndex >= this.feedbackTurnScrollOffset + visibleRows) {
-      this.feedbackTurnScrollOffset = this.feedbackTurnSelectedIndex - visibleRows + 1;
-    }
-    this.feedbackTurnScrollOffset = clamp(this.feedbackTurnScrollOffset, 0, Math.max(0, this.feedbackTurnChoices.length - visibleRows));
-  }
-
   private startFeedbackFromSelectedTurn(): void {
     const turn = this.feedbackTurnChoices[this.feedbackTurnSelectedIndex];
     if (!turn) {
       return;
     }
-    this.feedbackTurnModalOpen = false;
     this.startFeedbackDocument(turn.text, { preserveTurns: true });
   }
 
@@ -2960,7 +2832,6 @@ class GadgetUi {
     }
 
     this.feedbackTurnSelectedIndex = (this.feedbackTurnSelectedIndex + delta + count) % count;
-    this.syncFeedbackTurnScroll();
     this.startFeedbackFromSelectedTurn();
   }
 
@@ -2971,7 +2842,6 @@ class GadgetUi {
     this.diffBaseModalOpen = false;
     this.helpModalOpen = false;
     this.sessionModalOpen = false;
-    this.feedbackTurnModalOpen = false;
   }
 
   private resetInputCursor(): void {
@@ -3230,7 +3100,6 @@ class GadgetUi {
     this.feedbackDocument = null;
     this.feedbackComments.clear();
     this.activeFeedbackTarget = null;
-    this.feedbackTurnModalOpen = false;
     this.feedbackTurnChoices = [];
     this.setStatus("review mode");
   }
@@ -3250,10 +3119,8 @@ class GadgetUi {
     this.feedbackDocument = null;
     this.feedbackComments.clear();
     this.activeFeedbackTarget = null;
-    this.feedbackTurnModalOpen = false;
     this.feedbackTurnChoices = [];
     this.feedbackTurnSelectedIndex = 0;
-    this.feedbackTurnScrollOffset = 0;
     this.input = "";
     this.resetInputCursor();
     this.closeOverlays();
@@ -3265,11 +3132,6 @@ class GadgetUi {
       const nonEmptyTurns = turns.filter((turn) => turn.text.trim().length > 0);
       this.feedbackTurnChoices = nonEmptyTurns;
       this.feedbackTurnSelectedIndex = 0;
-      this.feedbackTurnScrollOffset = 0;
-      if (nonEmptyTurns.length > 1) {
-        this.openFeedbackTurnModal(nonEmptyTurns);
-        return;
-      }
       text = nonEmptyTurns[0]?.text ?? null;
     } catch (error) {
       this.setStatus(`feedback turn list failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -3310,7 +3172,6 @@ class GadgetUi {
     this.feedbackDocument = null;
     this.feedbackComments.clear();
     this.activeFeedbackTarget = null;
-    this.feedbackTurnModalOpen = false;
     this.feedbackTurnChoices = [];
     this.mode = "none";
     this.input = "";
@@ -3521,7 +3382,6 @@ class GadgetUi {
       this.feedbackDocument = null;
       this.feedbackComments.clear();
       this.activeFeedbackTarget = null;
-      this.feedbackTurnModalOpen = false;
       this.feedbackTurnChoices = [];
       this.mode = "none";
       this.input = "";
@@ -3547,11 +3407,9 @@ class GadgetUi {
     this.feedbackDocument = createFeedbackDocument(value);
     this.feedbackComments.clear();
     this.activeFeedbackTarget = null;
-    this.feedbackTurnModalOpen = false;
     if (!options.preserveTurns) {
       this.feedbackTurnChoices = [];
       this.feedbackTurnSelectedIndex = 0;
-      this.feedbackTurnScrollOffset = 0;
     }
     this.mode = "none";
     this.input = "";
