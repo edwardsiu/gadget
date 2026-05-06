@@ -79,11 +79,14 @@ gadget
 ```text
 J            Down
 K            Up
+G            First line
+Shift+G      Last line
 Shift+J      Page down
 Shift+K      Page up
 H            Previous file
 L            Next file
 P            Open file selector
+F            Toggle file tree
 Shift+P      Search project files
 B            Choose diff base
 O            Toggle full file
