@@ -96,5 +96,5 @@ function formatFeedbackPromptSection(document: FeedbackDocument, draft: Feedback
   const currentLine = document.lines[draft.lineNumber - 1]?.text ?? "";
   const quotedLine = currentLine.length > 0 ? `> ${currentLine}` : ">";
   const commentLabel = commentIndex === null ? `Line ${draft.lineNumber}:` : `Comment ${commentIndex} (line ${draft.lineNumber}):`;
-  return `${commentLabel}\n${quotedLine}\n${draft.value}`;
+  return `${commentLabel}\n${quotedLine}\n\n${draft.value}`;
 }
