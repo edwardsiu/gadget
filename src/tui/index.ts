@@ -15,11 +15,12 @@ import { createDiffWatcher, listDiffBaseCandidates, listSearchableFiles, readDif
 import type { RuntimeAdapterFactory, RuntimeSession } from "../runtimes/types";
 import {
   createFeedbackDocument,
-  formatFeedbackPrompt,
+  formatFeedbackPromptGroups,
   feedbackCommentKey,
   feedbackDocumentToDiffFile,
   type FeedbackCommentDraft,
   type FeedbackDocument,
+  type FeedbackPromptGroup,
 } from "../feedback";
 import type { AgentAdapter, AgentComment, AgentFeedbackTurn, DiffFile, DiffLineRef, DiffState } from "../types";
 import { commentCursorIndexAtPoint, createInlineCommentBox, formatInlineComment, inlineCommentHeight, moveCommentCursorVertically } from "./comment-box";
@@ -218,6 +219,7 @@ class GadgetUi {
   private activeFeedbackTarget: FeedbackCommentTarget | null = null;
   private feedbackTurnChoices: AgentFeedbackTurn[] = [];
   private feedbackTurnSelectedIndex = 0;
+  private feedbackTurnComments = new Map<string, Map<string, FeedbackCommentDraft>>();
   private input = "";
   private inputCursorIndex = 0;
   private inputCursorPreferredColumn: number | null = null;
@@ -1651,7 +1653,10 @@ class GadgetUi {
       this.activeFeedbackTarget &&
       !this.feedbackComments.has(this.activeFeedbackTarget.key) &&
       this.input.trim().length > 0;
-    return this.feedbackComments.size + (unsavedActiveComment ? 1 : 0);
+    const savedCount = this.feedbackTurnChoices.length > 0
+      ? [...this.feedbackTurnComments.values()].reduce((count, comments) => count + comments.size, 0)
+      : this.feedbackComments.size;
+    return savedCount + (unsavedActiveComment ? 1 : 0);
   }
 
   private isEditingFeedbackComment(): boolean {
@@ -2819,7 +2824,46 @@ class GadgetUi {
     if (!turn) {
       return;
     }
-    this.startFeedbackDocument(turn.text, { preserveTurns: true });
+    this.feedbackComments = this.feedbackCommentsForTurn(this.feedbackTurnSelectedIndex);
+    this.startFeedbackDocument(turn.text, {
+      preserveTurns: true,
+      preserveComments: true,
+      title: feedbackTurnStatusLabel(turn, this.feedbackTurnSelectedIndex),
+    });
+  }
+
+  private feedbackCommentsForTurn(index: number): Map<string, FeedbackCommentDraft> {
+    const key = this.feedbackTurnStorageKey(index);
+    let comments = this.feedbackTurnComments.get(key);
+    if (!comments) {
+      comments = new Map<string, FeedbackCommentDraft>();
+      this.feedbackTurnComments.set(key, comments);
+    }
+    return comments;
+  }
+
+  private feedbackTurnStorageKey(index: number): string {
+    const turn = this.feedbackTurnChoices[index];
+    return `${index}:${turn?.id ?? "unknown"}`;
+  }
+
+  private resetFeedbackComments(): void {
+    this.feedbackComments = new Map<string, FeedbackCommentDraft>();
+  }
+
+  private feedbackPromptGroups(): FeedbackPromptGroup[] {
+    if (this.feedbackTurnChoices.length === 0) {
+      return this.feedbackDocument
+        ? [{ document: this.feedbackDocument, drafts: [...this.feedbackComments.values()] }]
+        : [];
+    }
+
+    return this.feedbackTurnChoices
+      .map((turn, index): FeedbackPromptGroup => ({
+        document: createFeedbackDocument(turn.text, feedbackTurnStatusLabel(turn, index)),
+        drafts: [...(this.feedbackTurnComments.get(this.feedbackTurnStorageKey(index))?.values() ?? [])],
+      }))
+      .filter((group) => group.drafts.length > 0);
   }
 
   private cycleFeedbackTurn(delta: number): void {
@@ -3098,9 +3142,10 @@ class GadgetUi {
     this.reviewMode = true;
     this.feedbackMode = false;
     this.feedbackDocument = null;
-    this.feedbackComments.clear();
+    this.resetFeedbackComments();
     this.activeFeedbackTarget = null;
     this.feedbackTurnChoices = [];
+    this.feedbackTurnComments.clear();
     this.setStatus("review mode");
   }
 
@@ -3117,10 +3162,11 @@ class GadgetUi {
     this.activeReviewTarget = null;
     this.feedbackMode = true;
     this.feedbackDocument = null;
-    this.feedbackComments.clear();
+    this.resetFeedbackComments();
     this.activeFeedbackTarget = null;
     this.feedbackTurnChoices = [];
     this.feedbackTurnSelectedIndex = 0;
+    this.feedbackTurnComments.clear();
     this.input = "";
     this.resetInputCursor();
     this.closeOverlays();
@@ -3132,7 +3178,10 @@ class GadgetUi {
       const nonEmptyTurns = turns.filter((turn) => turn.text.trim().length > 0);
       this.feedbackTurnChoices = nonEmptyTurns;
       this.feedbackTurnSelectedIndex = 0;
-      text = nonEmptyTurns[0]?.text ?? null;
+      if (nonEmptyTurns.length > 0) {
+        this.startFeedbackFromSelectedTurn();
+        return;
+      }
     } catch (error) {
       this.setStatus(`feedback turn list failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -3167,12 +3216,13 @@ class GadgetUi {
   }
 
   private cancelFeedback(): void {
-    const count = this.feedbackComments.size;
+    const count = this.feedbackCommentCount();
     this.feedbackMode = false;
     this.feedbackDocument = null;
-    this.feedbackComments.clear();
+    this.resetFeedbackComments();
     this.activeFeedbackTarget = null;
     this.feedbackTurnChoices = [];
+    this.feedbackTurnComments.clear();
     this.mode = "none";
     this.input = "";
     this.resetInputCursor();
@@ -3361,8 +3411,9 @@ class GadgetUi {
       return;
     }
 
-    const drafts = [...this.feedbackComments.values()].sort((left, right) => left.savedAt - right.savedAt);
-    if (drafts.length === 0) {
+    const groups = this.feedbackPromptGroups();
+    const draftCount = groups.reduce((count, group) => count + group.drafts.length, 0);
+    if (draftCount === 0) {
       this.setStatus("feedback has no comments");
       this.renderAll();
       return;
@@ -3374,19 +3425,20 @@ class GadgetUi {
       return;
     }
 
-    const prompt = formatFeedbackPrompt(this.feedbackDocument, drafts);
-    this.setStatus(`${this.adapter.label === "clipboard" ? "copying" : "sending"} ${drafts.length} feedback ${pluralize("comment", drafts.length)}`);
+    const prompt = formatFeedbackPromptGroups(groups);
+    this.setStatus(`${this.adapter.label === "clipboard" ? "copying" : "sending"} ${draftCount} feedback ${pluralize("comment", draftCount)}`);
     try {
       await this.adapter.sendPrompt(prompt);
       this.feedbackMode = false;
       this.feedbackDocument = null;
-      this.feedbackComments.clear();
+      this.resetFeedbackComments();
       this.activeFeedbackTarget = null;
       this.feedbackTurnChoices = [];
+      this.feedbackTurnComments.clear();
       this.mode = "none";
       this.input = "";
       this.resetInputCursor();
-      this.setStatus(`${this.adapter.label === "clipboard" ? "copied" : "sent"} ${drafts.length} feedback ${pluralize("comment", drafts.length)}`);
+      this.setStatus(`${this.adapter.label === "clipboard" ? "copied" : "sent"} ${draftCount} feedback ${pluralize("comment", draftCount)}`);
     } catch (error) {
       this.setStatus(`feedback send failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -3403,13 +3455,16 @@ class GadgetUi {
     this.startFeedbackDocument(value);
   }
 
-  private startFeedbackDocument(value: string, options: { preserveTurns?: boolean } = {}): void {
-    this.feedbackDocument = createFeedbackDocument(value);
-    this.feedbackComments.clear();
+  private startFeedbackDocument(value: string, options: { preserveTurns?: boolean; preserveComments?: boolean; title?: string } = {}): void {
+    this.feedbackDocument = createFeedbackDocument(value, options.title);
+    if (!options.preserveComments) {
+      this.resetFeedbackComments();
+    }
     this.activeFeedbackTarget = null;
     if (!options.preserveTurns) {
       this.feedbackTurnChoices = [];
       this.feedbackTurnSelectedIndex = 0;
+      this.feedbackTurnComments.clear();
     }
     this.mode = "none";
     this.input = "";

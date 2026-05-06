@@ -45,11 +45,20 @@ export function feedbackDocumentToDiffFile(document: FeedbackDocument): DiffFile
   };
 }
 
+export type FeedbackPromptGroup = {
+  document: FeedbackDocument;
+  drafts: FeedbackCommentDraft[];
+};
+
 export function formatFeedbackPrompt(document: FeedbackDocument, drafts: FeedbackCommentDraft[]): string {
-  return [...drafts]
-    .sort((left, right) => left.savedAt - right.savedAt)
-    .map((draft) => formatFeedbackPromptSection(document, draft))
-    .join("\n\n");
+  return formatFeedbackPromptGroups([{ document, drafts }]);
+}
+
+export function formatFeedbackPromptGroups(groups: FeedbackPromptGroup[]): string {
+  return groups
+    .map((group) => formatFeedbackPromptGroup(group.document, group.drafts))
+    .filter(Boolean)
+    .join("\n\n---\n\n");
 }
 
 export function feedbackCommentKey(lineNumber: number): string {
@@ -69,8 +78,23 @@ function feedbackLineToDiffLine(line: FeedbackLine): DiffLineRef {
   };
 }
 
-function formatFeedbackPromptSection(document: FeedbackDocument, draft: FeedbackCommentDraft): string {
+function formatFeedbackPromptGroup(document: FeedbackDocument, drafts: FeedbackCommentDraft[]): string {
+  const sortedDrafts = [...drafts].sort((left, right) => left.savedAt - right.savedAt);
+  if (sortedDrafts.length === 0) {
+    return "";
+  }
+
+  const title = document.title.trim();
+  const header = title && title !== "Feedback" ? `Feedback on ${title}:` : "Feedback:";
+  return [
+    header,
+    ...sortedDrafts.map((draft, index) => formatFeedbackPromptSection(document, draft, sortedDrafts.length > 1 ? index + 1 : null)),
+  ].join("\n\n");
+}
+
+function formatFeedbackPromptSection(document: FeedbackDocument, draft: FeedbackCommentDraft, commentIndex: number | null): string {
   const currentLine = document.lines[draft.lineNumber - 1]?.text ?? "";
   const quotedLine = currentLine.length > 0 ? `> ${currentLine}` : ">";
-  return `${quotedLine}\n${draft.value}`;
+  const commentLabel = commentIndex === null ? `Line ${draft.lineNumber}:` : `Comment ${commentIndex} (line ${draft.lineNumber}):`;
+  return `${commentLabel}\n${quotedLine}\n${draft.value}`;
 }
