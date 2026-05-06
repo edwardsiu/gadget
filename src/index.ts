@@ -7,6 +7,7 @@ import { cleanupGadgetResources, type GadgetCleanupResult } from "./adapters/cod
 import { assertGitRepo, readGitInfo, type GitInfo } from "./git";
 import { createClaudeRuntimeAdapter, listClaudeRuntimeSessions, startClaudeRuntime } from "./runtimes/claude";
 import { createCodexRuntimeAdapter, listCodexRuntimeSessions, startCodexRuntime } from "./runtimes/codex";
+import { createPiRuntimeAdapter, listPiRuntimeSessions, startPiRuntime } from "./runtimes/pi";
 import type { RuntimeSession } from "./runtimes/types";
 import { runGadgetUi, type InitialFileTarget } from "./tui";
 
@@ -82,6 +83,16 @@ program
     await startClaudeCommand(claudeArgs);
   });
 
+program
+  .command("pi")
+  .description("start Pi with Gadget bridge integration")
+  .allowUnknownOption(true)
+  .allowExcessArguments(true)
+  .argument("[piArgs...]", "arguments to pass to Pi")
+  .action(async (piArgs) => {
+    await startPiCommand(piArgs);
+  });
+
 try {
   await program.parseAsync();
 } catch (error) {
@@ -100,6 +111,17 @@ async function startClaudeCommand(claudeArgs: string[]): Promise<void> {
   await ensureGitRepo(cwd);
   try {
     await startClaudeRuntime(cwd, claudeArgs);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
+async function startPiCommand(piArgs: string[]): Promise<void> {
+  const cwd = process.cwd();
+  await ensureGitRepo(cwd);
+  try {
+    await startPiRuntime(cwd, piArgs);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -171,12 +193,16 @@ async function listRuntimeSessions(cwd: string): Promise<RuntimeSession[]> {
   return [
     ...(await listCodexRuntimeSessions(cwd)),
     ...(await listClaudeRuntimeSessions(cwd)),
+    ...(await listPiRuntimeSessions(cwd)),
   ];
 }
 
 function createAdapterForSession(session: RuntimeSession) {
   if (session.client === "claude") {
     return createClaudeRuntimeAdapter(session);
+  }
+  if (session.client === "pi") {
+    return createPiRuntimeAdapter(session);
   }
   return createCodexRuntimeAdapter(session);
 }
@@ -259,6 +285,9 @@ function printCleanupResult(result: GadgetCleanupResult): void {
 function formatCleanupSession(session: GadgetCleanupResult["removedSessions"][number]): string {
   if ("remoteUrl" in session) {
     return `${session.remoteUrl} ${session.cwd}`;
+  }
+  if (session.client === "pi") {
+    return `${session.client}:${session.transport} ${session.pid} ${session.url} ${session.cwd}`;
   }
   return `${session.client}:${session.transport} ${session.workspace} ${session.surface} ${session.cwd}`;
 }

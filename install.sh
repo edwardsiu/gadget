@@ -100,7 +100,7 @@ fi
 if [ -z "$GADGET_PI" ]; then
   GADGET_PI=0
   if command -v pi >/dev/null 2>&1 && [ -t 0 ]; then
-    printf "Install Gadget Pi extension for /feedback and /review? [y/N] "
+    printf "Install Gadget Pi bridge extension? [y/N] "
     read -r reply
     case "$reply" in
       y|Y|yes|YES) GADGET_PI=1 ;;

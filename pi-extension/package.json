@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Pi overlays for Gadget feedback and code review workflows.",
+  "description": "Pi bridge extension for Gadget review sessions.",
   "keywords": [
     "pi-package",
     "pi-extension",

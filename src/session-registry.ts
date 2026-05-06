@@ -26,7 +26,21 @@ export type GadgetCmuxSessionRecord = {
   updatedAt: string;
 };
 
-export type GadgetSessionRecord = GadgetCodexSessionRecord | GadgetCmuxSessionRecord;
+export type GadgetPiSessionRecord = {
+  client: "pi";
+  transport: "http";
+  token: string;
+  cwd: string;
+  pid: number;
+  url: string;
+  sessionId: string | null;
+  sessionFile: string | null;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GadgetSessionRecord = GadgetCodexSessionRecord | GadgetCmuxSessionRecord | GadgetPiSessionRecord;
 
 export type GadgetSessionRegistry = {
   projects: Record<string, GadgetSessionRecord[]>;
@@ -88,6 +102,26 @@ export function isGadgetCmuxSessionRecord(value: unknown): value is GadgetCmuxSe
     typeof candidate.surface === "string" &&
     typeof candidate.name === "string" &&
     typeof candidate.command === "string" &&
+    typeof candidate.createdAt === "string" &&
+    typeof candidate.updatedAt === "string"
+  );
+}
+
+export function isGadgetPiSessionRecord(value: unknown): value is GadgetPiSessionRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.client === "pi" &&
+    candidate.transport === "http" &&
+    typeof candidate.token === "string" &&
+    typeof candidate.cwd === "string" &&
+    typeof candidate.pid === "number" &&
+    typeof candidate.url === "string" &&
+    (typeof candidate.sessionId === "string" || candidate.sessionId === null) &&
+    (typeof candidate.sessionFile === "string" || candidate.sessionFile === null) &&
+    typeof candidate.name === "string" &&
     typeof candidate.createdAt === "string" &&
     typeof candidate.updatedAt === "string"
   );

@@ -1,6 +1,6 @@
 import type { AgentAdapter } from "../types";
 
-export type GadgetClient = "codex" | "claude";
+export type GadgetClient = "codex" | "claude" | "pi";
 
 export type RuntimeSession = {
   client: GadgetClient;

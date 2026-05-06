@@ -41,7 +41,10 @@ gadget codex
 # Or start Claude. This works best with cmux enabled.
 gadget claude
 
-# Or install only the Pi extension for in-Pi /feedback and /review overlays.
+# Or start Pi with Gadget bridge integration.
+gadget pi
+
+# Or install only the Pi extension so plain `pi` sessions can connect to Gadget.
 pi install ./pi-extension
 
 # Connect to your running agent.
@@ -50,7 +53,7 @@ gadget
 
 `gadget claude` uses cmux only when `[integrations].cmux` is enabled and the command is run inside a cmux terminal pane. Review comments are pasted into that Claude pane as one multiline message. If cmux integration is disabled, `gadget claude` runs the Claude CLI normally.
 
-The Pi extension is independent from the Gadget CLI. Install it with `pi install ./pi-extension`, or answer yes to the installer prompt. It adds `/feedback` for assistant-turn or transcript feedback and `/review` for saved-comments-only code review inside Pi.
+The Pi extension is independent from the Gadget CLI. Install it with `pi install ./pi-extension`, or answer yes to the installer prompt, and plain `pi` sessions will register themselves with Gadget. `gadget pi` starts Pi with the bridge extension loaded for one-command setup.
 
 ## Keybindings
 

@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import type { AgentAdapter, AgentComment, AgentSessionInfo } from "../types";
 import { formatCommentPrompt } from "../comments";
 import { readGitInfo } from "../git";
-import { isGadgetCmuxSessionRecord, isGadgetCodexSessionRecord, readSessionRegistry, writeSessionRegistry, type GadgetCodexSessionRecord, type GadgetSessionRecord } from "../session-registry";
+import { isGadgetCmuxSessionRecord, isGadgetCodexSessionRecord, isGadgetPiSessionRecord, readSessionRegistry, writeSessionRegistry, type GadgetCodexSessionRecord, type GadgetPiSessionRecord, type GadgetSessionRecord } from "../session-registry";
 
 type Pending = {
   resolve: (value: any) => void;
@@ -280,6 +280,7 @@ export async function cleanupGadgetResources(_options: { cwd?: string } = {}): P
   const allSessions = Object.values(registry.projects).flat();
   const codexSessions = allSessions.filter(isGadgetCodexSessionRecord);
   const cmuxSessions = allSessions.filter(isGadgetCmuxSessionRecord);
+  const piSessions = allSessions.filter(isGadgetPiSessionRecord);
   const processes = await listProcesses();
   const appServers = processes.map(withRemoteUrl).filter(isCodexAppServerProcess);
   const activeRemoteUrls = new Set(processes.map(parseCodexRemoteUrl).filter((value): value is string => Boolean(value)));
@@ -304,6 +305,8 @@ export async function cleanupGadgetResources(_options: { cwd?: string } = {}): P
   const removedCodexSessions = codexSessions.filter((session) => !activeRemoteUrls.has(session.remoteUrl) && !activeAppServerRemoteUrls.has(session.remoteUrl));
   const activeCmuxSessions: GadgetSessionRecord[] = [];
   const removedCmuxSessions: GadgetSessionRecord[] = [];
+  const activePiSessions: GadgetSessionRecord[] = [];
+  const removedPiSessions: GadgetSessionRecord[] = [];
 
   for (const session of cmuxSessions) {
     if (await isCmuxSessionActive(session)) {
@@ -313,8 +316,16 @@ export async function cleanupGadgetResources(_options: { cwd?: string } = {}): P
     }
   }
 
-  const activeSessions = [...activeCodexSessions, ...activeCmuxSessions];
-  const removedSessions = [...removedCodexSessions, ...removedCmuxSessions];
+  for (const session of piSessions) {
+    if (await isPiSessionActive(session)) {
+      activePiSessions.push(session);
+    } else {
+      removedPiSessions.push(session);
+    }
+  }
+
+  const activeSessions = [...activeCodexSessions, ...activeCmuxSessions, ...activePiSessions];
+  const removedSessions = [...removedCodexSessions, ...removedCmuxSessions, ...removedPiSessions];
 
   registry.projects = groupSessionsByProject(activeSessions);
   await writeSessionRegistry(registry);
@@ -827,6 +838,18 @@ async function isCmuxSessionActive(session: { workspace: string; surface: string
     child.once("error", () => resolve(false));
     child.once("exit", (code) => resolve(code === 0));
   });
+}
+
+async function isPiSessionActive(session: GadgetPiSessionRecord): Promise<boolean> {
+  try {
+    const response = await fetch(`${session.url}/health`, {
+      headers: { "x-gadget-token": session.token },
+      signal: AbortSignal.timeout(500),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 function sendProcessSignal(pid: number, signal: NodeJS.Signals): void {
