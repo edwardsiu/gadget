@@ -981,7 +981,7 @@ class GadgetUi {
     this.view.renderNav({
       navMode: this.navMode,
       navHeight,
-      files: this.state.files,
+      files: this.diffFiles(),
       scrollOffset: this.navScrollOffset,
       visibleFileCount: this.visibleNavFileCount(),
       selectedFileIndex: this.selectedFileIndex,
@@ -1276,7 +1276,7 @@ class GadgetUi {
     }
     this.view.renderFileModal({
       open: this.fileModalOpen,
-      files: this.state.files,
+      files: this.diffFiles(),
       selectedFileIndex: this.selectedFileIndex,
       scrollOffset: this.fileModalScrollOffset,
       currentFilePath: this.selectedFile()?.filePath ?? "no file",
@@ -1682,7 +1682,7 @@ class GadgetUi {
       return this.view.fileSearchModal.renderedHeight(this.fileSearchMatches.length, this.view.height);
     }
     if (this.fileModalOpen) {
-      return this.view.fileSelectorModal.renderedHeight(this.state.files, this.view.height);
+      return this.view.fileSelectorModal.renderedHeight(this.diffFiles(), this.view.height);
     }
     return 0;
   }
@@ -1706,7 +1706,7 @@ class GadgetUi {
     if (!this.view) {
       return 1;
     }
-    return this.view.fileSelectorModal.visibleRows(this.state.files, this.view.height);
+    return this.view.fileSelectorModal.visibleRows(this.diffFiles(), this.view.height);
   }
 
   private fileSearchModalVisibleRows(): number {
@@ -1763,7 +1763,7 @@ class GadgetUi {
   }
 
   private clampedNavScrollOffset(offset: number): number {
-    const maxOffset = Math.max(0, this.state.files.length - this.visibleNavFileCount());
+    const maxOffset = Math.max(0, this.diffFiles().length - this.visibleNavFileCount());
     return clamp(offset, 0, maxOffset);
   }
 
@@ -1772,7 +1772,7 @@ class GadgetUi {
   }
 
   private clampedFileModalScrollOffset(offset: number): number {
-    const maxOffset = Math.max(0, this.state.files.length - this.fileModalVisibleRows());
+    const maxOffset = Math.max(0, this.diffFiles().length - this.fileModalVisibleRows());
     return clamp(offset, 0, maxOffset);
   }
 
@@ -1876,7 +1876,7 @@ class GadgetUi {
       return null;
     }
     const index = this.navScrollOffset + Math.floor((row - 1) / NAV_CARD_HEIGHT);
-    return index < this.state.files.length ? index : null;
+    return index < this.diffFiles().length ? index : null;
   }
 
   private selectFile(index: number): void {
@@ -2429,6 +2429,10 @@ class GadgetUi {
       shouldCenterAfterRender = true;
       this.setStatus(`showing current file ${file.filePath}`);
     } else {
+      if (!this.fileHasDiff(file)) {
+        this.setStatus(`no diff for ${file.filePath}`);
+        return;
+      }
       this.fileViewMode = "diff";
       if (this.diffViewConfig === "continuous") {
         this.selectedLineIndex = this.continuousLineIndexForFile(this.selectedFileIndex);
@@ -3416,8 +3420,12 @@ class GadgetUi {
     return file.rawDiff.length > 0;
   }
 
+  private diffFiles(): DiffFile[] {
+    return this.state.files.filter((file) => this.fileHasDiff(file));
+  }
+
   private continuousDiffLines(): DiffLineRef[] {
-    return this.state.files.flatMap((file) => [
+    return this.diffFiles().flatMap((file) => [
       continuousFileHeaderLine(file),
       ...file.lines,
     ]);
@@ -3426,7 +3434,10 @@ class GadgetUi {
   private continuousLineIndexForFile(fileIndex: number): number {
     let lineIndex = 0;
     for (let index = 0; index < fileIndex; index += 1) {
-      lineIndex += 1 + (this.state.files[index]?.lines.length ?? 0);
+      const file = this.state.files[index];
+      if (file && this.fileHasDiff(file)) {
+        lineIndex += 1 + file.lines.length;
+      }
     }
     return lineIndex;
   }
