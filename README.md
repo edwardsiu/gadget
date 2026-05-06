@@ -2,7 +2,7 @@
 
 Gadget is a terminal diff reviewer for coding-agent sessions.
 
-It watches a working tree, renders live file diffs, lets you attach comments to diff lines, and can either copy comments to your clipboard or connect them to a live Codex or Claude session.
+It watches a working tree, renders live file diffs, lets you attach comments to diff lines, and can either copy comments to your clipboard or connect them to a live Codex, Claude, or Pi session.
 
 ## Quick Demonstration
 
@@ -15,12 +15,12 @@ It watches a working tree, renders live file diffs, lets you attach comments to 
 - Clipboard review mode for copying comments into any agent or chat.
 - Connected Codex mode for sending review comments back to a live session.
 - Optional cmux-backed Claude mode for sending review comments to the current Claude pane.
+- Pi bridge mode for sending review comments to active Pi sessions.
 - Full-file view, file search, diff-base selection, and keyboard-first navigation.
 
 ## Install
 
-The installer bootstraps Bun if needed. Claude integration requires cmux.
-It can also optionally install the standalone Pi extension.
+The installer bootstraps Bun if needed. Claude integration requires cmux. Pi support requires the Gadget Pi extension, which the installer can optionally install.
 
 ```bash
 bash install.sh
@@ -47,13 +47,38 @@ gadget pi
 # Or install only the Pi extension so plain `pi` sessions can connect to Gadget.
 pi install ./pi-extension
 
-# Connect to your running agent.
+# Connect to your running agent from another terminal pane.
 gadget
 ```
 
 `gadget claude` uses cmux only when `[integrations].cmux` is enabled and the command is run inside a cmux terminal pane. Review comments are pasted into that Claude pane as one multiline message. If cmux integration is disabled, `gadget claude` runs the Claude CLI normally.
 
-The Pi extension is independent from the Gadget CLI. Install it with `pi install ./pi-extension`, or answer yes to the installer prompt, and plain `pi` sessions will register themselves with Gadget. `gadget pi` starts Pi with the bridge extension loaded for one-command setup.
+## Pi Support
+
+Gadget supports Pi through a small bridge extension. The extension starts a local authenticated bridge inside Pi and registers the live Pi session with Gadget. Gadget keeps its normal OpenTUI review UI in a separate terminal pane, so inline comments, click handling, and review submission use the same interface as the other Gadget modes.
+
+There are two supported ways to use it:
+
+```bash
+# One-command launch: starts Pi with the bridge loaded from this checkout.
+gadget pi
+
+# Standalone extension install: lets normal `pi` launches register with Gadget.
+pi install ./pi-extension
+pi
+```
+
+After Pi is running, open Gadget from the same git checkout:
+
+```bash
+gadget
+```
+
+If multiple Pi sessions are active for the checkout, Gadget shows a session picker before opening the reviewer. Reinstall the extension after pulling changes that modify `pi-extension`:
+
+```bash
+pi install ./pi-extension
+```
 
 ## Keybindings
 
