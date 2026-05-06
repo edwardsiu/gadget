@@ -1,0 +1,26 @@
+{
+  "name": "@gadget/pi-extension",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi overlays for Gadget feedback and code review workflows.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "gadget"
+  ],
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "node --check extensions/gadget.js"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/gadget.js"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  }
+}

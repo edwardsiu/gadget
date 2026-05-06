@@ -20,6 +20,7 @@ It watches a working tree, renders live file diffs, lets you attach comments to 
 ## Install
 
 The installer bootstraps Bun if needed. Claude integration requires cmux.
+It can also optionally install the standalone Pi extension.
 
 ```bash
 bash install.sh
@@ -40,11 +41,16 @@ gadget codex
 # Or start Claude. This works best with cmux enabled.
 gadget claude
 
+# Or install only the Pi extension for in-Pi /feedback and /review overlays.
+pi install ./pi-extension
+
 # Connect to your running agent.
 gadget
 ```
 
 `gadget claude` uses cmux only when `[integrations].cmux` is enabled and the command is run inside a cmux terminal pane. Review comments are pasted into that Claude pane as one multiline message. If cmux integration is disabled, `gadget claude` runs the Claude CLI normally.
+
+The Pi extension is independent from the Gadget CLI. Install it with `pi install ./pi-extension`, or answer yes to the installer prompt. It adds `/feedback` for assistant-turn or transcript feedback and `/review` for saved-comments-only code review inside Pi.
 
 ## Keybindings
 

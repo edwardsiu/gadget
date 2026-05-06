@@ -11,12 +11,17 @@ GADGET_CMUX=${GADGET_CMUX:-}
 GADGET_CMUX_EXPLICIT=0
 GADGET_DIFF_VIEW=${GADGET_DIFF_VIEW:-}
 GADGET_DIFF_VIEW_EXPLICIT=0
+GADGET_PI=${GADGET_PI:-}
+GADGET_PI_EXPLICIT=0
 
 if [ -n "$GADGET_CMUX" ]; then
   GADGET_CMUX_EXPLICIT=1
 fi
 if [ -n "$GADGET_DIFF_VIEW" ]; then
   GADGET_DIFF_VIEW_EXPLICIT=1
+fi
+if [ -n "$GADGET_PI" ]; then
+  GADGET_PI_EXPLICIT=1
 fi
 
 if [ -z "$BUN_BIN" ]; then
@@ -92,9 +97,24 @@ if [ "$GADGET_DIFF_VIEW_EXPLICIT" = "0" ] && [ -t 0 ]; then
   done
 fi
 
+if [ -z "$GADGET_PI" ]; then
+  GADGET_PI=0
+  if command -v pi >/dev/null 2>&1 && [ -t 0 ]; then
+    printf "Install Gadget Pi extension for /feedback and /review? [y/N] "
+    read -r reply
+    case "$reply" in
+      y|Y|yes|YES) GADGET_PI=1 ;;
+    esac
+  fi
+fi
+
 case "$GADGET_CMUX" in
   1|true|TRUE|yes|YES|y|Y) GADGET_CMUX=1 ;;
   *) GADGET_CMUX=0 ;;
+esac
+case "$GADGET_PI" in
+  1|true|TRUE|yes|YES|y|Y) GADGET_PI=1 ;;
+  *) GADGET_PI=0 ;;
 esac
 case "$GADGET_DIFF_VIEW" in
   ""|file) GADGET_DIFF_VIEW=file ;;
@@ -170,11 +190,26 @@ fi
 
 ln -sfn "$REPO_ROOT/bin/gadget" "$INSTALL_TARGET"
 
+if [ "$GADGET_PI" = "1" ]; then
+  if ! command -v pi >/dev/null 2>&1; then
+    echo "GADGET_PI=1 was set, but pi could not be found on PATH." >&2
+    exit 1
+  fi
+  pi install "$REPO_ROOT/pi-extension"
+fi
+
 echo "Installed gadget to $INSTALL_TARGET"
 if [ "$GADGET_CMUX" = "1" ]; then
   echo "Enabled cmux integration for gadget claude."
 else
   echo "cmux integration is disabled. Reinstall with GADGET_CMUX=1 to enable it."
+fi
+if [ "$GADGET_PI" = "1" ]; then
+  echo "Installed Gadget Pi extension."
+elif [ "$GADGET_PI_EXPLICIT" = "1" ]; then
+  echo "Skipped Gadget Pi extension."
+else
+  echo "Pi extension is not installed. Run 'pi install $REPO_ROOT/pi-extension' to install it separately."
 fi
 echo "Diff view is '$GADGET_DIFF_VIEW'. Reinstall with GADGET_DIFF_VIEW=continuous to enable continuous diffs."
 case ":$PATH:" in
