@@ -11,7 +11,7 @@ import type { KeyEvent } from "@opentui/core";
 import { basename } from "node:path";
 import { ClipboardAdapter } from "../adapters/clipboard-adapter";
 import { createComment, formatReviewPrompt } from "../comments";
-import { readGadgetConfig, type DiffRenderingConfig, type DiffViewConfig } from "../config";
+import { readGadgetConfig, type DiffRenderingConfig } from "../config";
 import { createDiffWatcher, listDiffBaseCandidates, listSearchableFiles, readDiffState, type DiffBaseCandidate, type GitInfo, type ReadDiffStateOptions } from "../git";
 import type { RuntimeAdapterFactory, RuntimeSession } from "../runtimes/types";
 import {
@@ -30,7 +30,6 @@ import {
   diffSplitCellWidths,
   formatDiffRows,
   formatDiffSplitRows,
-  formatDiffViewportBottomBorder,
   formatDiffViewportDiffRow,
   formatDiffViewportFileHeaderRows,
   formatDiffViewportRow,
@@ -158,19 +157,6 @@ function createFileTreeNode(): FileTreeNode {
   return { children: new Map() };
 }
 
-function continuousFileHeaderLine(file: DiffFile): DiffLineRef {
-  return {
-    id: `file:${file.filePath}`,
-    filePath: file.filePath,
-    kind: "file",
-    oldLine: null,
-    newLine: null,
-    hunkHeader: null,
-    text: `${file.filePath} (+${file.additions} -${file.removals})`,
-    raw: file.rawDiff,
-  };
-}
-
 registerAdditionalSyntaxParsers();
 
 export async function runGadgetUi(options: {
@@ -185,7 +171,6 @@ export async function runGadgetUi(options: {
   const app = new GadgetUi(
     options.cwd,
     options.adapter,
-    config.diff.view,
     config.diff.rendering,
     options.gitInfo,
     options.initialFile,
@@ -286,7 +271,6 @@ class GadgetUi {
   constructor(
     private cwd: string,
     private adapter: AgentAdapter,
-    private readonly diffViewConfig: DiffViewConfig,
     private readonly diffRenderingConfig: DiffRenderingConfig,
     private readonly initialGitInfo?: GitInfo,
     private readonly initialFile?: InitialFileTarget,
@@ -1090,21 +1074,6 @@ class GadgetUi {
     const fullFileHighlights = this.fileViewMode === "file" ? fullFileLineHighlights(file) : undefined;
     if (this.effectiveDiffRendering() === "split") {
       renderedRows = this.renderSplitDiffLines(file, lines, diffWidth, hasLeftBorder, borderFg);
-      if (this.continuousDiffActive()) {
-        const bottomBorder = view.createTextRenderable({
-          id: "gadget-continuous-diff-bottom-border",
-          height: 1,
-          width: diffWidth,
-          fg: COLORS.text,
-          bg: COLORS.bg,
-          truncate: true,
-          content: formatDiffViewportBottomBorder(diffWidth, hasLeftBorder, borderFg),
-          selectable: false,
-        });
-        view.diffScroll.add(bottomBorder);
-        this.lineIds.push(bottomBorder.id);
-        renderedRows += 1;
-      }
       this.addDiffFillerRows(renderedRows, diffWidth, hasLeftBorder, borderFg);
       this.finishDiffRender(lines);
       return;
@@ -1142,7 +1111,6 @@ class GadgetUi {
                 return;
               }
               this.selectedLineIndex = index;
-              this.syncSelectedFileToSelectedLine();
               this.revealSelectedLine = true;
               this.renderAll();
             },
@@ -1226,22 +1194,6 @@ class GadgetUi {
       }
     });
 
-    if (this.continuousDiffActive()) {
-      const bottomBorder = view.createTextRenderable({
-        id: "gadget-continuous-diff-bottom-border",
-        height: 1,
-        width: diffWidth,
-        fg: COLORS.text,
-        bg: COLORS.bg,
-        truncate: true,
-        content: formatDiffViewportBottomBorder(diffWidth, hasLeftBorder, borderFg),
-        selectable: false,
-      });
-      view.diffScroll.add(bottomBorder);
-      this.lineIds.push(bottomBorder.id);
-      renderedRows += 1;
-    }
-
     this.addDiffFillerRows(renderedRows, diffWidth, hasLeftBorder, borderFg);
     this.finishDiffRender(lines);
   }
@@ -1316,7 +1268,6 @@ class GadgetUi {
               return;
             }
             this.selectedLineIndex = index;
-            this.syncSelectedFileToSelectedLine();
             this.revealSelectedLine = true;
             this.renderAll();
           },
@@ -2339,13 +2290,9 @@ class GadgetUi {
     }
     this.saveActiveAnnotationComment();
     this.selectedFileIndex = clamp(index, 0, this.state.files.length - 1);
-    const selectedFile = this.state.files[this.selectedFileIndex];
-    if (selectedFile && this.shouldReturnToConfiguredDiffView(selectedFile)) {
-      this.fileViewMode = "diff";
-    }
     this.revealSelectedFileInNav();
     this.revealSelectedFileInModal();
-    this.selectedLineIndex = this.continuousDiffActive() ? this.continuousLineIndexForFile(this.selectedFileIndex) : 0;
+    this.selectedLineIndex = 0;
     this.revealSelectedLine = true;
     this.pinSelectedLineToTop = true;
     this.centerSelectedLineInViewport = false;
@@ -2662,7 +2609,6 @@ class GadgetUi {
     this.saveActiveAnnotationComment();
     const previousLineIndex = this.selectedLineIndex;
     this.selectedLineIndex = clamp(index, 0, Math.max(0, lines.length - 1));
-    this.syncSelectedFileToSelectedLine();
     this.revealSelectedLine = true;
     this.pinSelectedLineToTop = false;
     this.centerSelectedLineInViewport = false;
@@ -2683,7 +2629,6 @@ class GadgetUi {
     const targetVisualRow = currentVisualRow + direction * visibleRows;
     const previousLineIndex = this.selectedLineIndex;
     this.selectedLineIndex = this.diffLineIndexFromVisualRow(targetVisualRow);
-    this.syncSelectedFileToSelectedLine();
     this.revealSelectedLine = true;
     this.pinSelectedLineToTop = true;
     this.centerSelectedLineInViewport = false;
@@ -2707,7 +2652,6 @@ class GadgetUi {
     }
     const previousLineIndex = this.selectedLineIndex;
     this.selectedLineIndex = topLine;
-    this.syncSelectedFileToSelectedLine();
     this.revealSelectedLine = false;
     this.pinSelectedLineToTop = false;
     this.centerSelectedLineInViewport = false;
@@ -2776,11 +2720,11 @@ class GadgetUi {
     const lines = this.selectedLines();
     if (this.effectiveDiffRendering() === "split") {
       const lineRows = this.diffRenderUnits(lines, "split").reduce((count, unit) => count + this.diffRenderUnitVisualHeight(unit, lines), 0);
-      return lineRows + (this.continuousDiffActive() ? 1 : 0);
+      return lineRows;
     }
 
     const lineRows = lines.reduce((count, line, index) => count + this.diffLineVisualHeight(line, index), 0);
-    return lineRows + (this.continuousDiffActive() ? 1 : 0);
+    return lineRows;
   }
 
   private diffLineVisualStart(lineIndex: number): number {
@@ -2977,13 +2921,8 @@ class GadgetUi {
         return;
       }
       this.fileViewMode = "diff";
-      if (this.diffViewConfig === "continuous") {
-        this.selectedLineIndex = this.continuousLineIndexForFile(this.selectedFileIndex);
-        this.setStatus(`showing continuous diff at ${file.filePath}`);
-      } else {
-        this.selectedLineIndex = nearestLineIndexForLineNumber(file.lines, selectedLineNumber);
-        this.setStatus(`showing diff ${file.filePath}`);
-      }
+      this.selectedLineIndex = nearestLineIndexForLineNumber(file.lines, selectedLineNumber);
+      this.setStatus(`showing diff ${file.filePath}`);
       this.centerSelectedLineInViewport = false;
     }
 
@@ -3043,7 +2982,6 @@ class GadgetUi {
     }
     if (line.kind === "file") {
       this.selectedLineIndex = lineIndex;
-      this.syncSelectedFileToSelectedLine();
       this.revealSelectedLine = true;
       this.renderAll();
       return;
@@ -3051,7 +2989,6 @@ class GadgetUi {
     this.ensureReviewMode();
     this.saveActiveReviewComment();
     this.selectedLineIndex = clamp(lineIndex, 0, Math.max(0, lines.length - 1));
-    this.syncSelectedFileToSelectedLine();
     const file = this.fileForPath(line.filePath) ?? this.selectedFile();
     if (!file) {
       return;
@@ -3587,8 +3524,8 @@ class GadgetUi {
     this.resetInputCursor();
     this.fileSearchModalOpen = false;
     this.selectedFileIndex = fileIndex;
-    this.fileViewMode = this.shouldUseContinuousDiffForFile(file) ? "diff" : "file";
-    this.selectedLineIndex = this.continuousDiffActive() ? this.continuousLineIndexForFile(this.selectedFileIndex) : 0;
+    this.fileViewMode = this.fileHasDiff(file) ? "diff" : "file";
+    this.selectedLineIndex = 0;
     this.revealSelectedLine = true;
     this.pinSelectedLineToTop = true;
     this.centerSelectedLineInViewport = false;
@@ -4052,13 +3989,6 @@ class GadgetUi {
     if (this.feedbackMode && this.feedbackDocument) {
       return feedbackDocumentToDiffFile(this.feedbackDocument);
     }
-    if (this.continuousDiffActive()) {
-      const line = this.selectedLines()[this.selectedLineIndex];
-      const lineFile = line ? this.fileForPath(line.filePath) : null;
-      if (lineFile) {
-        return lineFile;
-      }
-    }
     return this.state.files[this.selectedFileIndex] ?? null;
   }
 
@@ -4070,9 +4000,6 @@ class GadgetUi {
     if (this.feedbackMode && this.feedbackDocument) {
       return feedbackDocumentToDiffFile(this.feedbackDocument).lines;
     }
-    if (this.continuousDiffActive()) {
-      return this.continuousDiffLines();
-    }
     const file = this.selectedFile();
     if (!file) {
       return [];
@@ -4083,18 +4010,6 @@ class GadgetUi {
     return file.lines;
   }
 
-  private continuousDiffActive(): boolean {
-    return this.diffViewConfig === "continuous" && this.fileViewMode === "diff" && !this.feedbackMode;
-  }
-
-  private shouldReturnToConfiguredDiffView(file: DiffFile): boolean {
-    return this.fileViewMode === "file" && this.shouldUseContinuousDiffForFile(file);
-  }
-
-  private shouldUseContinuousDiffForFile(file: DiffFile): boolean {
-    return this.diffViewConfig === "continuous" && this.fileHasDiff(file);
-  }
-
   private fileHasDiff(file: DiffFile): boolean {
     return file.rawDiff.length > 0;
   }
@@ -4103,52 +4018,12 @@ class GadgetUi {
     return this.state.files.filter((file) => this.fileHasDiff(file));
   }
 
-  private continuousDiffLines(): DiffLineRef[] {
-    return this.diffFiles().flatMap((file) => [
-      continuousFileHeaderLine(file),
-      ...file.lines,
-    ]);
-  }
-
-  private continuousLineIndexForFile(fileIndex: number): number {
-    let lineIndex = 0;
-    for (let index = 0; index < fileIndex; index += 1) {
-      const file = this.state.files[index];
-      if (file && this.fileHasDiff(file)) {
-        lineIndex += 1 + file.lines.length;
-      }
-    }
-    return lineIndex;
-  }
-
-  private syncSelectedFileToSelectedLine(): void {
-    if (!this.continuousDiffActive()) {
-      return;
-    }
-    const line = this.selectedLines()[this.selectedLineIndex];
-    const fileIndex = line ? this.state.files.findIndex((file) => file.filePath === line.filePath) : -1;
-    if (fileIndex < 0 || fileIndex === this.selectedFileIndex) {
-      return;
-    }
-    this.selectedFileIndex = fileIndex;
-    this.revealSelectedFileInNav();
-    this.revealSelectedFileInModal();
-    if (this.fileTreeOpen) {
-      this.revealSelectedFileInTree();
-    }
-  }
-
   private fileForPath(filePath: string): DiffFile | null {
     return this.state.files.find((file) => file.filePath === filePath) ?? null;
   }
 
   private statusFileLabel(file: DiffFile | null): string {
-    if (!this.continuousDiffActive()) {
-      return file?.filePath ?? "no file";
-    }
-    const cursorLine = this.selectedLine();
-    const cursorFile = cursorLine ? this.fileForPath(cursorLine.filePath) : null;
-    return cursorFile?.filePath ?? file?.filePath ?? "no file";
+    return file?.filePath ?? "no file";
   }
 
   private setStatus(status: string): void {

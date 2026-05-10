@@ -4,7 +4,6 @@ import { join } from "node:path";
 
 export type GadgetConfig = {
   diff: {
-    view: DiffViewConfig;
     rendering: DiffRenderingConfig;
   };
   integrations: {
@@ -12,12 +11,10 @@ export type GadgetConfig = {
   };
 };
 
-export type DiffViewConfig = "file" | "continuous";
 export type DiffRenderingConfig = "unified" | "auto";
 
 const DEFAULT_CONFIG: GadgetConfig = {
   diff: {
-    view: "file",
     rendering: "auto",
   },
   integrations: {
@@ -43,7 +40,6 @@ export function gadgetConfigPath(): string {
 function parseGadgetConfig(value: string): GadgetConfig {
   const config: GadgetConfig = {
     diff: {
-      view: DEFAULT_CONFIG.diff.view,
       rendering: DEFAULT_CONFIG.diff.rendering,
     },
     integrations: {
@@ -65,10 +61,6 @@ function parseGadgetConfig(value: string): GadgetConfig {
     }
 
     if (section === "diff") {
-      const match = /^view\s*=\s*"(file|continuous)"\s*$/.exec(line);
-      if (match) {
-        config.diff.view = match[1] as DiffViewConfig;
-      }
       const renderingMatch = /^rendering\s*=\s*"(unified|auto)"\s*$/.exec(line);
       if (renderingMatch) {
         config.diff.rendering = renderingMatch[1] as DiffRenderingConfig;
