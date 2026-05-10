@@ -11,7 +11,7 @@ import type { KeyEvent } from "@opentui/core";
 import { basename } from "node:path";
 import { ClipboardAdapter } from "../adapters/clipboard-adapter";
 import { createComment, formatReviewPrompt } from "../comments";
-import { readGadgetConfig, type DiffViewConfig } from "../config";
+import { readGadgetConfig, type DiffRenderingConfig, type DiffViewConfig } from "../config";
 import { createDiffWatcher, listDiffBaseCandidates, listSearchableFiles, readDiffState, type DiffBaseCandidate, type GitInfo, type ReadDiffStateOptions } from "../git";
 import type { RuntimeAdapterFactory, RuntimeSession } from "../runtimes/types";
 import {
@@ -27,11 +27,14 @@ import type { AgentAdapter, AgentComment, AgentFeedbackTurn, DiffFile, DiffLineR
 import { commentCursorIndexAtPoint, createInlineCommentBox, formatInlineComment, inlineCommentHeight, moveCommentCursorVertically } from "./comment-box";
 import { diffStateSignature, mergeDiffRefreshOptions } from "./diff-state";
 import {
+  diffSplitCellWidths,
   formatDiffRows,
+  formatDiffSplitRows,
   formatDiffViewportBottomBorder,
   formatDiffViewportDiffRow,
   formatDiffViewportFileHeaderRows,
   formatDiffViewportRow,
+  formatDiffViewportSplitDiffRow,
   fullFileLineHighlights,
   lineBg,
   lineFg,
@@ -93,12 +96,14 @@ import {
   FILE_SEARCH_MAX_MATCHES,
   FILE_MODAL_MARGIN_Y,
   REVIEW_BORDER_FG,
+  SPLIT_DIFF_MIN_WIDTH,
   SYNTAX_HIGHLIGHT_OVERSCAN_ROWS,
 } from "./theme";
 
 type InputMode = "none" | "comment" | "file-search" | "feedback-content";
 type FileViewMode = "diff" | "file";
 type DiffBaseOverrideSource = "github" | "manual";
+type DiffRenderingMode = "unified" | "split";
 const MAX_SESSION_CHOICE_ROWS = 10;
 const MAX_FEEDBACK_STATUS_SUMMARY_LENGTH = 80;
 const MAX_SYNTAX_DOCUMENT_CACHE_ENTRIES = 128;
@@ -134,6 +139,16 @@ type SyntaxHighlightLineGroup = {
   side: HighlightCacheSide;
   lines: DiffLineRef[];
 };
+type DiffSplitRenderUnit = {
+  kind: "split";
+  oldIndex: number | null;
+  newIndex: number | null;
+};
+type DiffSingleRenderUnit = {
+  kind: "single";
+  index: number;
+};
+type DiffRenderUnit = DiffSingleRenderUnit | DiffSplitRenderUnit;
 export type InitialFileTarget = {
   filePath: string;
   lineNumber?: number;
@@ -167,7 +182,16 @@ export async function runGadgetUi(options: {
   createAdapterForSession?: RuntimeAdapterFactory;
 }): Promise<void> {
   const config = await readGadgetConfig();
-  const app = new GadgetUi(options.cwd, options.adapter, config.diff.view, options.gitInfo, options.initialFile, options.sessionChoices ?? [], options.createAdapterForSession);
+  const app = new GadgetUi(
+    options.cwd,
+    options.adapter,
+    config.diff.view,
+    config.diff.rendering,
+    options.gitInfo,
+    options.initialFile,
+    options.sessionChoices ?? [],
+    options.createAdapterForSession,
+  );
   await app.start();
   await new Promise<void>(() => undefined);
 }
@@ -263,6 +287,7 @@ class GadgetUi {
     private cwd: string,
     private adapter: AgentAdapter,
     private readonly diffViewConfig: DiffViewConfig,
+    private readonly diffRenderingConfig: DiffRenderingConfig,
     private readonly initialGitInfo?: GitInfo,
     private readonly initialFile?: InitialFileTarget,
     private sessionChoices: RuntimeSession[] = [],
@@ -322,6 +347,7 @@ class GadgetUi {
         void this.connectSelectedSessionChoice();
       },
       onSessionChoiceScroll: (delta) => this.scrollSessionChoices(delta),
+      onResize: () => this.handleResize(),
     });
     this.bindInput();
     this.startCommentCursorTimer();
@@ -341,6 +367,11 @@ class GadgetUi {
     await this.openInitialFileTarget();
     void this.refreshDiffAndRender().catch((error) => this.setStatus(error.message));
     void this.refreshGitHubDiffBase().catch(() => undefined);
+  }
+
+  private handleResize(): void {
+    this.revealSelectedLine = true;
+    this.renderAll();
   }
 
   private bindInput(): void {
@@ -1057,6 +1088,28 @@ class GadgetUi {
 
     const lines = this.selectedLines();
     const fullFileHighlights = this.fileViewMode === "file" ? fullFileLineHighlights(file) : undefined;
+    if (this.effectiveDiffRendering() === "split") {
+      renderedRows = this.renderSplitDiffLines(file, lines, diffWidth, hasLeftBorder, borderFg);
+      if (this.continuousDiffActive()) {
+        const bottomBorder = view.createTextRenderable({
+          id: "gadget-continuous-diff-bottom-border",
+          height: 1,
+          width: diffWidth,
+          fg: COLORS.text,
+          bg: COLORS.bg,
+          truncate: true,
+          content: formatDiffViewportBottomBorder(diffWidth, hasLeftBorder, borderFg),
+          selectable: false,
+        });
+        view.diffScroll.add(bottomBorder);
+        this.lineIds.push(bottomBorder.id);
+        renderedRows += 1;
+      }
+      this.addDiffFillerRows(renderedRows, diffWidth, hasLeftBorder, borderFg);
+      this.finishDiffRender(lines);
+      return;
+    }
+
     lines.forEach((line, index) => {
       const selected = index === this.selectedLineIndex;
       const reviewKey = reviewCommentKey(file.filePath, line);
@@ -1190,7 +1243,10 @@ class GadgetUi {
     }
 
     this.addDiffFillerRows(renderedRows, diffWidth, hasLeftBorder, borderFg);
+    this.finishDiffRender(lines);
+  }
 
+  private finishDiffRender(lines: DiffLineRef[]): void {
     if (lines[this.selectedLineIndex] && this.revealSelectedLine) {
       this.revealSelectionInViewport(this.pinSelectedLineToTop, this.centerSelectedLineInViewport);
       this.revealSelectedLine = false;
@@ -1198,6 +1254,332 @@ class GadgetUi {
       this.centerSelectedLineInViewport = false;
     }
     this.refreshVisibleSyntaxHighlights();
+  }
+
+  private renderSplitDiffLines(
+    file: DiffFile,
+    lines: DiffLineRef[],
+    diffWidth: number,
+    hasLeftBorder: boolean,
+    borderFg: string,
+  ): number {
+    if (!this.view) {
+      return 0;
+    }
+
+    let renderedRows = 0;
+    for (const unit of this.diffRenderUnits(lines, "split")) {
+      if (unit.kind === "single") {
+        renderedRows += this.renderFullWidthDiffLine(file, lines, unit.index, diffWidth, hasLeftBorder, borderFg);
+        renderedRows += this.renderAnnotationComment(lines[unit.index], unit.index, diffWidth);
+        continue;
+      }
+      renderedRows += this.renderSplitDiffUnit(lines, unit, diffWidth, hasLeftBorder, borderFg);
+    }
+    return renderedRows;
+  }
+
+  private renderFullWidthDiffLine(
+    file: DiffFile,
+    lines: DiffLineRef[],
+    index: number,
+    diffWidth: number,
+    hasLeftBorder: boolean,
+    borderFg: string,
+  ): number {
+    if (!this.view) {
+      return 0;
+    }
+
+    const view = this.view;
+    const line = lines[index];
+    if (!line) {
+      return 0;
+    }
+    const selected = index === this.selectedLineIndex;
+    if (line.kind === "file") {
+      const headerFile = this.fileForPath(line.filePath) ?? file;
+      const headerRows = formatDiffViewportFileHeaderRows(headerFile, diffWidth, selected, index > 0, hasLeftBorder, borderFg);
+      const lineRows: TextRenderable[] = [];
+      headerRows.forEach((content, rowIndex) => {
+        const row = view.createTextRenderable({
+          id: `gadget-line-${index}-${rowIndex}`,
+          height: 1,
+          width: diffWidth,
+          fg: COLORS.text,
+          bg: COLORS.bg,
+          truncate: true,
+          content,
+          selectable: false,
+          onMouseDown: (event) => {
+            if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
+              return;
+            }
+            this.selectedLineIndex = index;
+            this.syncSelectedFileToSelectedLine();
+            this.revealSelectedLine = true;
+            this.renderAll();
+          },
+        });
+        view.diffScroll.add(row);
+        this.lineIds.push(row.id);
+        lineRows.push(row);
+      });
+      this.lineRenderables.set(index, lineRows);
+      return headerRows.length;
+    }
+
+    const diffContentWidth = this.diffContentWidth();
+    const visualRows = formatDiffRows(line, diffContentWidth, this.syntaxLineChunks.get(line.id));
+    const lineRows: TextRenderable[] = [];
+    visualRows.forEach((content, rowIndex) => {
+      const row = view.createTextRenderable({
+        id: `gadget-line-${index}-${rowIndex}`,
+        height: 1,
+        width: diffWidth,
+        fg: COLORS.text,
+        bg: COLORS.bg,
+        truncate: true,
+        content: formatDiffViewportDiffRow(content, diffWidth, {
+          fg: selected ? "#ffffff" : lineFg(line),
+          bg: selected ? COLORS.selected : lineBg(line),
+        }, hasLeftBorder, borderFg),
+        selectable: false,
+        onMouseDown: (event) => {
+          if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
+            return;
+          }
+          this.openCommentAtLine(index);
+        },
+      });
+      view.diffScroll.add(row);
+      this.lineIds.push(row.id);
+      lineRows.push(row);
+    });
+    this.lineRenderables.set(index, lineRows);
+    return visualRows.length;
+  }
+
+  private renderSplitDiffUnit(
+    lines: DiffLineRef[],
+    unit: DiffSplitRenderUnit,
+    diffWidth: number,
+    hasLeftBorder: boolean,
+    borderFg: string,
+  ): number {
+    if (!this.view) {
+      return 0;
+    }
+
+    const view = this.view;
+    const oldLine = unit.oldIndex === null ? null : lines[unit.oldIndex] ?? null;
+    const newLine = unit.newIndex === null ? null : lines[unit.newIndex] ?? null;
+    const { leftWidth, rightWidth } = diffSplitCellWidths(diffWidth, hasLeftBorder);
+    const oldRows = oldLine ? formatDiffSplitRows(oldLine, leftWidth, "old", this.syntaxLineChunks.get(oldLine.id)) : [];
+    const newRows = newLine ? formatDiffSplitRows(newLine, rightWidth, "new", this.syntaxLineChunks.get(newLine.id)) : [];
+    const rowCount = Math.max(1, oldRows.length, newRows.length);
+    const renderedRows: TextRenderable[] = [];
+
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      const row = view.createTextRenderable({
+        id: `gadget-line-${unit.oldIndex ?? "blank"}-${unit.newIndex ?? "blank"}-${rowIndex}`,
+        height: 1,
+        width: diffWidth,
+        fg: COLORS.text,
+        bg: COLORS.bg,
+        truncate: true,
+        content: formatDiffViewportSplitDiffRow(
+          oldRows[rowIndex] ?? null,
+          newRows[rowIndex] ?? null,
+          diffWidth,
+          this.splitLineStyle(oldLine, unit.oldIndex),
+          this.splitLineStyle(newLine, unit.newIndex),
+          hasLeftBorder,
+          borderFg,
+        ),
+        selectable: false,
+        onMouseDown: (event) => {
+          if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
+            return;
+          }
+          const targetIndex = this.splitTargetLineIndexFromMouse(event, row, unit, diffWidth, hasLeftBorder);
+          if (targetIndex !== null) {
+            this.openCommentAtLine(targetIndex);
+          }
+        },
+      });
+      view.diffScroll.add(row);
+      this.lineIds.push(row.id);
+      renderedRows.push(row);
+    }
+
+    if (unit.oldIndex !== null) {
+      this.lineRenderables.set(unit.oldIndex, renderedRows);
+    }
+    if (unit.newIndex !== null && unit.newIndex !== unit.oldIndex) {
+      this.lineRenderables.set(unit.newIndex, renderedRows);
+    }
+
+    let height = rowCount;
+    if (unit.oldIndex !== null) {
+      height += this.renderAnnotationComment(oldLine, unit.oldIndex, diffWidth);
+    }
+    if (unit.newIndex !== null && unit.newIndex !== unit.oldIndex) {
+      height += this.renderAnnotationComment(newLine, unit.newIndex, diffWidth);
+    }
+    return height;
+  }
+
+  private renderAnnotationComment(line: DiffLineRef | null | undefined, index: number, width: number): number {
+    if (!this.view || !line || !this.isAnnotationMode()) {
+      return 0;
+    }
+
+    const annotation = this.annotationStateForLine(line, index);
+    if (!annotation.saved && !annotation.editing) {
+      return 0;
+    }
+
+    const commentBox = createInlineCommentBox({
+      renderer: this.view.renderer,
+      id: `gadget-review-comment-${index}`,
+      value: annotation.editing ? this.input : annotation.saved?.value ?? "",
+      width,
+      submitLabel: "Save",
+      showHints: annotation.editing,
+      showDeleteHint: annotation.editing && annotation.saved !== null,
+      ...(annotation.editing ? { cursorVisible: this.commentCursorVisible, cursorIndex: this.inputCursorIndex } : {}),
+    });
+    const handleCommentClick = (event: MouseEvent) => {
+      if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
+        return;
+      }
+      const value = annotation.editing ? this.input : annotation.saved?.value ?? "";
+      const cursorIndex = this.commentCursorIndexFromMouse(event, value, commentBox.text);
+      if (annotation.editing) {
+        this.setInputCursor(cursorIndex);
+        return;
+      }
+      this.openCommentAtLine(index, cursorIndex);
+    };
+    commentBox.box.onMouseDown = (event) => {
+      handleCommentClick(event);
+    };
+    commentBox.text.onMouseDown = (event) => {
+      handleCommentClick(event);
+    };
+    this.view.diffScroll.add(commentBox.box);
+    this.lineIds.push(commentBox.box.id);
+    if (annotation.editing) {
+      this.inlineCommentText = commentBox.text;
+      this.inlineCommentHeightRows = commentBox.height;
+    }
+    return commentBox.height;
+  }
+
+  private splitLineStyle(line: DiffLineRef | null, index: number | null) {
+    if (!line || index === null) {
+      return { fg: COLORS.text, bg: COLORS.bg };
+    }
+    const selected = index === this.selectedLineIndex;
+    return {
+      fg: selected ? "#ffffff" : lineFg(line),
+      bg: selected ? COLORS.selected : lineBg(line),
+    };
+  }
+
+  private annotationStateForLine(line: DiffLineRef, index: number) {
+    const reviewKey = reviewCommentKey(line.filePath, line);
+    const feedbackKey = feedbackCommentKey(line.newLine ?? index + 1);
+    const savedReviewComment = this.reviewMode ? this.reviewComments.get(reviewKey) ?? null : null;
+    const savedFeedbackComment = this.feedbackMode ? this.feedbackComments.get(feedbackKey) ?? null : null;
+    const editingReviewComment = this.reviewMode && this.mode === "comment" && this.activeReviewTarget?.key === reviewKey;
+    const editingFeedbackComment = this.feedbackMode && this.mode === "comment" && this.activeFeedbackTarget?.key === feedbackKey;
+    return {
+      saved: savedReviewComment ?? savedFeedbackComment,
+      editing: editingReviewComment || editingFeedbackComment,
+    };
+  }
+
+  private splitTargetLineIndexFromMouse(
+    event: MouseEvent,
+    row: TextRenderable,
+    unit: DiffSplitRenderUnit,
+    diffWidth: number,
+    hasLeftBorder: boolean,
+  ): number | null {
+    if (unit.oldIndex === null) {
+      return unit.newIndex;
+    }
+    if (unit.newIndex === null || unit.oldIndex === unit.newIndex) {
+      return unit.oldIndex;
+    }
+
+    const { leftWidth, dividerWidth } = diffSplitCellWidths(diffWidth, hasLeftBorder);
+    const localX = event.x - row.screenX;
+    const leftStart = hasLeftBorder ? 1 : 0;
+    const rightStart = leftStart + leftWidth + dividerWidth;
+    return localX < rightStart ? unit.oldIndex : unit.newIndex;
+  }
+
+  private effectiveDiffRendering(): DiffRenderingMode {
+    if (this.diffRenderingConfig === "unified") {
+      return "unified";
+    }
+    if (this.fileViewMode !== "diff" || this.feedbackMode) {
+      return "unified";
+    }
+    return this.diffPaneWidth() >= SPLIT_DIFF_MIN_WIDTH ? "split" : "unified";
+  }
+
+  private diffRenderUnits(lines: DiffLineRef[], mode = this.effectiveDiffRendering()): DiffRenderUnit[] {
+    if (mode === "unified") {
+      return lines.map((_, index) => ({ kind: "single", index }));
+    }
+
+    const units: DiffRenderUnit[] = [];
+    let index = 0;
+    while (index < lines.length) {
+      const line = lines[index];
+      if (!line) {
+        index += 1;
+        continue;
+      }
+
+      if (line.kind === "add" || line.kind === "remove") {
+        const removes: number[] = [];
+        const adds: number[] = [];
+        while (index < lines.length) {
+          const changeLine = lines[index];
+          if (!changeLine || (changeLine.kind !== "add" && changeLine.kind !== "remove")) {
+            break;
+          }
+          if (changeLine.kind === "remove") {
+            removes.push(index);
+          } else {
+            adds.push(index);
+          }
+          index += 1;
+        }
+        const rowCount = Math.max(removes.length, adds.length);
+        for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+          units.push({
+            kind: "split",
+            oldIndex: removes[rowIndex] ?? null,
+            newIndex: adds[rowIndex] ?? null,
+          });
+        }
+        continue;
+      }
+
+      if (line.kind === "context") {
+        units.push({ kind: "split", oldIndex: index, newIndex: index });
+      } else {
+        units.push({ kind: "single", index });
+      }
+      index += 1;
+    }
+    return units;
   }
 
   private renderFeedbackContentInput(): void {
@@ -1421,13 +1803,7 @@ class GadgetUi {
     }
 
     const lines = this.selectedLines();
-    const lineIndexes = visibleLineIndexes(
-      lines,
-      Math.round(this.view.diffScroll.scrollTop),
-      this.visibleDiffRows(),
-      this.diffContentWidth(),
-      SYNTAX_HIGHLIGHT_OVERSCAN_ROWS,
-    );
+    const lineIndexes = this.visibleDiffLineIndexes(lines);
     if (!lineIndexes.includes(this.selectedLineIndex)) {
       lineIndexes.push(this.selectedLineIndex);
       lineIndexes.sort((left, right) => left - right);
@@ -1443,11 +1819,54 @@ class GadgetUi {
       if (generation !== this.syntaxGeneration || !results.some(Boolean)) {
         return;
       }
+      let needsRenderAll = false;
       for (const index of lineIndexes) {
-        this.updateRenderedLine(index);
+        if (!this.updateRenderedLine(index)) {
+          needsRenderAll = true;
+        }
+      }
+      if (needsRenderAll) {
+        this.renderAll();
+        return;
       }
       this.view?.requestRender();
     });
+  }
+
+  private visibleDiffLineIndexes(lines: DiffLineRef[]): number[] {
+    if (!this.view) {
+      return [];
+    }
+    if (this.effectiveDiffRendering() === "unified") {
+      return visibleLineIndexes(
+        lines,
+        Math.round(this.view.diffScroll.scrollTop),
+        this.visibleDiffRows(),
+        this.diffContentWidth(),
+        SYNTAX_HIGHLIGHT_OVERSCAN_ROWS,
+      );
+    }
+
+    const visibleTop = Math.max(0, Math.round(this.view.diffScroll.scrollTop) - SYNTAX_HIGHLIGHT_OVERSCAN_ROWS);
+    const visibleBottom = Math.max(visibleTop, Math.round(this.view.diffScroll.scrollTop) + this.visibleDiffRows() + SYNTAX_HIGHLIGHT_OVERSCAN_ROWS - 1);
+    const indexes: number[] = [];
+    let row = 0;
+    for (const unit of this.diffRenderUnits(lines, "split")) {
+      const height = this.diffRenderUnitVisualHeight(unit, lines);
+      const lineTop = row;
+      const lineBottom = row + height - 1;
+      row += height;
+      if (lineBottom < visibleTop) {
+        continue;
+      }
+      if (lineTop > visibleBottom) {
+        break;
+      }
+      for (const index of this.diffRenderUnitLineIndexes(unit)) {
+        indexes.push(index);
+      }
+    }
+    return indexes;
   }
 
   private visibleSyntaxHighlightTasks(
@@ -2318,6 +2737,10 @@ class GadgetUi {
   }
 
   private updateRenderedLine(lineIndex: number): boolean {
+    if (this.effectiveDiffRendering() === "split") {
+      return false;
+    }
+
     const file = this.selectedFile();
     const lines = this.selectedLines();
     const line = lines[lineIndex];
@@ -2350,12 +2773,29 @@ class GadgetUi {
   }
 
   private diffVisualRowCount(): number {
-    const lineRows = this.selectedLines().reduce((count, line, index) => count + this.diffLineVisualHeight(line, index), 0);
+    const lines = this.selectedLines();
+    if (this.effectiveDiffRendering() === "split") {
+      const lineRows = this.diffRenderUnits(lines, "split").reduce((count, unit) => count + this.diffRenderUnitVisualHeight(unit, lines), 0);
+      return lineRows + (this.continuousDiffActive() ? 1 : 0);
+    }
+
+    const lineRows = lines.reduce((count, line, index) => count + this.diffLineVisualHeight(line, index), 0);
     return lineRows + (this.continuousDiffActive() ? 1 : 0);
   }
 
   private diffLineVisualStart(lineIndex: number): number {
     const lines = this.selectedLines();
+    if (this.effectiveDiffRendering() === "split") {
+      let row = 0;
+      for (const unit of this.diffRenderUnits(lines, "split")) {
+        if (this.diffRenderUnitLineIndexes(unit).includes(lineIndex)) {
+          return row;
+        }
+        row += this.diffRenderUnitVisualHeight(unit, lines);
+      }
+      return row;
+    }
+
     let row = 0;
     for (let index = 0; index < lineIndex; index += 1) {
       const line = lines[index];
@@ -2373,6 +2813,17 @@ class GadgetUi {
     }
 
     const targetRow = Math.max(0, visualRow);
+    if (this.effectiveDiffRendering() === "split") {
+      let row = 0;
+      for (const unit of this.diffRenderUnits(lines, "split")) {
+        row += this.diffRenderUnitVisualHeight(unit, lines);
+        if (targetRow < row) {
+          return this.diffRenderUnitLineIndexes(unit)[0] ?? 0;
+        }
+      }
+      return lines.length - 1;
+    }
+
     let row = 0;
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
@@ -2385,6 +2836,34 @@ class GadgetUi {
       }
     }
     return lines.length - 1;
+  }
+
+  private diffRenderUnitVisualHeight(unit: DiffRenderUnit, lines: DiffLineRef[]): number {
+    if (unit.kind === "single") {
+      const line = lines[unit.index];
+      return line ? this.diffLineVisualHeight(line, unit.index) : 0;
+    }
+
+    const { leftWidth, rightWidth } = diffSplitCellWidths(this.diffPaneWidth(), this.diffHasLeftBorder());
+    const oldLine = unit.oldIndex === null ? null : lines[unit.oldIndex] ?? null;
+    const newLine = unit.newIndex === null ? null : lines[unit.newIndex] ?? null;
+    const oldRows = oldLine ? formatDiffSplitRows(oldLine, leftWidth, "old").length : 0;
+    const newRows = newLine ? formatDiffSplitRows(newLine, rightWidth, "new").length : 0;
+    let height = Math.max(1, oldRows, newRows);
+    if (unit.oldIndex !== null) {
+      height += this.diffAnnotationHeight(oldLine, unit.oldIndex);
+    }
+    if (unit.newIndex !== null && unit.newIndex !== unit.oldIndex) {
+      height += this.diffAnnotationHeight(newLine, unit.newIndex);
+    }
+    return height;
+  }
+
+  private diffRenderUnitLineIndexes(unit: DiffRenderUnit): number[] {
+    if (unit.kind === "single") {
+      return [unit.index];
+    }
+    return [...new Set([unit.oldIndex, unit.newIndex].filter((index): index is number => index !== null))];
   }
 
   private diffLineVisualHeight(line: DiffLineRef, lineIndex = this.selectedLineIndex): number {
@@ -2414,6 +2893,20 @@ class GadgetUi {
 
     const value = editingComment ? this.input : savedComment?.value ?? "";
     return lineHeight + inlineCommentHeight(value, this.diffPaneWidth());
+  }
+
+  private diffAnnotationHeight(line: DiffLineRef | null, lineIndex: number): number {
+    if (!this.isAnnotationMode() || !line) {
+      return 0;
+    }
+
+    const annotation = this.annotationStateForLine(line, lineIndex);
+    if (!annotation.saved && !annotation.editing) {
+      return 0;
+    }
+
+    const value = annotation.editing ? this.input : annotation.saved?.value ?? "";
+    return inlineCommentHeight(value, this.diffPaneWidth());
   }
 
   private revealSelectionInViewport(pinToTop: boolean, centerSelection: boolean): void {

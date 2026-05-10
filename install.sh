@@ -11,6 +11,8 @@ GADGET_CMUX=${GADGET_CMUX:-}
 GADGET_CMUX_EXPLICIT=0
 GADGET_DIFF_VIEW=${GADGET_DIFF_VIEW:-}
 GADGET_DIFF_VIEW_EXPLICIT=0
+GADGET_DIFF_RENDERING=${GADGET_DIFF_RENDERING:-}
+GADGET_DIFF_RENDERING_EXPLICIT=0
 GADGET_PI=${GADGET_PI:-}
 GADGET_PI_EXPLICIT=0
 
@@ -19,6 +21,9 @@ if [ -n "$GADGET_CMUX" ]; then
 fi
 if [ -n "$GADGET_DIFF_VIEW" ]; then
   GADGET_DIFF_VIEW_EXPLICIT=1
+fi
+if [ -n "$GADGET_DIFF_RENDERING" ]; then
+  GADGET_DIFF_RENDERING_EXPLICIT=1
 fi
 if [ -n "$GADGET_PI" ]; then
   GADGET_PI_EXPLICIT=1
@@ -66,6 +71,9 @@ if [ -z "$GADGET_CMUX" ] && [ -f "$CONFIG_FILE" ]; then
 fi
 if [ -z "$GADGET_DIFF_VIEW" ] && [ -f "$CONFIG_FILE" ]; then
   GADGET_DIFF_VIEW=$(sed -n 's/^[[:space:]]*view[[:space:]]*=[[:space:]]*"\(file\|continuous\)"[[:space:]]*$/\1/p' "$CONFIG_FILE" | tail -n 1)
+fi
+if [ -z "$GADGET_DIFF_RENDERING" ] && [ -f "$CONFIG_FILE" ]; then
+  GADGET_DIFF_RENDERING=$(sed -n 's/^[[:space:]]*rendering[[:space:]]*=[[:space:]]*"\(unified\|auto\)"[[:space:]]*$/\1/p' "$CONFIG_FILE" | tail -n 1)
 fi
 
 if [ -z "$GADGET_CMUX" ]; then
@@ -124,28 +132,46 @@ case "$GADGET_DIFF_VIEW" in
     exit 1
     ;;
 esac
+case "$GADGET_DIFF_RENDERING" in
+  ""|auto) GADGET_DIFF_RENDERING=auto ;;
+  unified) GADGET_DIFF_RENDERING=unified ;;
+  *)
+    echo "Invalid GADGET_DIFF_RENDERING: $GADGET_DIFF_RENDERING. Expected 'unified' or 'auto'." >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$CONFIG_DIR"
 if [ ! -f "$CONFIG_FILE" ]; then
   cat > "$CONFIG_FILE" <<EOF
 [diff]
 view = "$GADGET_DIFF_VIEW"
+rendering = "$GADGET_DIFF_RENDERING"
 
 [integrations]
 cmux = $([ "$GADGET_CMUX" = "1" ] && echo true || echo false)
 EOF
-elif [ "$GADGET_CMUX_EXPLICIT" = "1" ] || [ "$GADGET_DIFF_VIEW_EXPLICIT" = "1" ]; then
+elif [ "$GADGET_CMUX_EXPLICIT" = "1" ] || [ "$GADGET_DIFF_VIEW_EXPLICIT" = "1" ] || [ "$GADGET_DIFF_RENDERING_EXPLICIT" = "1" ]; then
   CONFIG_TMP="$CONFIG_FILE.tmp.$$"
   awk \
     -v cmux_value="$([ "$GADGET_CMUX" = "1" ] && echo true || echo false)" \
     -v cmux_explicit="$GADGET_CMUX_EXPLICIT" \
     -v diff_view="$GADGET_DIFF_VIEW" \
-    -v diff_view_explicit="$GADGET_DIFF_VIEW_EXPLICIT" '
-    BEGIN { cmux_updated = 0; diff_view_updated = 0 }
+    -v diff_view_explicit="$GADGET_DIFF_VIEW_EXPLICIT" \
+    -v diff_rendering="$GADGET_DIFF_RENDERING" \
+    -v diff_rendering_explicit="$GADGET_DIFF_RENDERING_EXPLICIT" '
+    BEGIN { cmux_updated = 0; diff_view_updated = 0; diff_rendering_updated = 0 }
     /^[[:space:]]*view[[:space:]]*=/ {
       if (diff_view_explicit == "1") {
         print "view = \"" diff_view "\""
         diff_view_updated = 1
+        next
+      }
+    }
+    /^[[:space:]]*rendering[[:space:]]*=/ {
+      if (diff_rendering_explicit == "1") {
+        print "rendering = \"" diff_rendering "\""
+        diff_rendering_updated = 1
         next
       }
     }
@@ -158,10 +184,15 @@ elif [ "$GADGET_CMUX_EXPLICIT" = "1" ] || [ "$GADGET_DIFF_VIEW_EXPLICIT" = "1" ]
     }
     { print }
     END {
-      if (diff_view_explicit == "1" && !diff_view_updated) {
+      if ((diff_view_explicit == "1" && !diff_view_updated) || (diff_rendering_explicit == "1" && !diff_rendering_updated)) {
         print ""
         print "[diff]"
-        print "view = \"" diff_view "\""
+        if (diff_view_explicit == "1" && !diff_view_updated) {
+          print "view = \"" diff_view "\""
+        }
+        if (diff_rendering_explicit == "1" && !diff_rendering_updated) {
+          print "rendering = \"" diff_rendering "\""
+        }
       }
       if (cmux_explicit == "1" && !cmux_updated) {
         print ""
@@ -212,6 +243,7 @@ else
   echo "Pi extension is not installed. Run 'pi install $REPO_ROOT/pi-extension' to install it separately."
 fi
 echo "Diff view is '$GADGET_DIFF_VIEW'. Reinstall with GADGET_DIFF_VIEW=continuous to enable continuous diffs."
+echo "Diff rendering is '$GADGET_DIFF_RENDERING'. Reinstall with GADGET_DIFF_RENDERING=unified to force unified diffs."
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)

@@ -53,6 +53,15 @@ gadget
 
 `gadget claude` uses cmux only when `[integrations].cmux` is enabled and the command is run inside a cmux terminal pane. Review comments are pasted into that Claude pane as one multiline message. If cmux integration is disabled, `gadget claude` runs the Claude CLI normally.
 
+## Configuration
+
+Gadget reads `$HOME/.gadget/config.toml` by default. Diff rendering uses split columns automatically on wide terminals unless forced back to unified mode:
+
+```toml
+[diff]
+rendering = "auto" # auto | unified
+```
+
 ## Pi Support
 
 Gadget supports Pi through a small bridge extension. The extension starts a local authenticated bridge inside Pi and registers the live Pi session with Gadget. Gadget keeps its normal OpenTUI review UI in a separate terminal pane, so inline comments, click handling, and review submission use the same interface as the other Gadget modes.

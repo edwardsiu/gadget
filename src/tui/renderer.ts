@@ -39,6 +39,7 @@ export type GadgetRendererCallbacks = {
   onDiffBaseScroll: (delta: number) => void;
   onSelectSessionChoice: (index: number) => void;
   onSessionChoiceScroll: (delta: number) => void;
+  onResize: () => void;
 };
 
 export class GadgetRenderer {
@@ -199,6 +200,10 @@ export class GadgetRenderer {
     root.add(this.helpModal.renderable);
     root.add(this.sessionModal.renderable);
     renderer.root.add(root);
+
+    renderer.on(CliRenderEvents.RESIZE, () => {
+      callbacks.onResize();
+    });
   }
 
   get width(): number {

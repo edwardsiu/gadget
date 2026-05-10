@@ -5,6 +5,7 @@ import { join } from "node:path";
 export type GadgetConfig = {
   diff: {
     view: DiffViewConfig;
+    rendering: DiffRenderingConfig;
   };
   integrations: {
     cmux: boolean;
@@ -12,10 +13,12 @@ export type GadgetConfig = {
 };
 
 export type DiffViewConfig = "file" | "continuous";
+export type DiffRenderingConfig = "unified" | "auto";
 
 const DEFAULT_CONFIG: GadgetConfig = {
   diff: {
     view: "file",
+    rendering: "auto",
   },
   integrations: {
     cmux: false,
@@ -41,6 +44,7 @@ function parseGadgetConfig(value: string): GadgetConfig {
   const config: GadgetConfig = {
     diff: {
       view: DEFAULT_CONFIG.diff.view,
+      rendering: DEFAULT_CONFIG.diff.rendering,
     },
     integrations: {
       cmux: DEFAULT_CONFIG.integrations.cmux,
@@ -64,6 +68,10 @@ function parseGadgetConfig(value: string): GadgetConfig {
       const match = /^view\s*=\s*"(file|continuous)"\s*$/.exec(line);
       if (match) {
         config.diff.view = match[1] as DiffViewConfig;
+      }
+      const renderingMatch = /^rendering\s*=\s*"(unified|auto)"\s*$/.exec(line);
+      if (renderingMatch) {
+        config.diff.rendering = renderingMatch[1] as DiffRenderingConfig;
       }
       continue;
     }

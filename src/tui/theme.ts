@@ -38,6 +38,7 @@ export const FILE_MODAL_MARGIN_X = 4;
 export const FILE_MODAL_MARGIN_Y = 3;
 export const FILE_SEARCH_MAX_MATCHES = 100;
 export const SYNTAX_HIGHLIGHT_OVERSCAN_ROWS = 3;
+export const SPLIT_DIFF_MIN_WIDTH = 120;
 export const HELP_MODAL_WIDTH = 56;
 export const HELP_MODAL_ROWS = [
   "J            Down",

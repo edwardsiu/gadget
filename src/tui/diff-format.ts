@@ -19,6 +19,8 @@ export type DiffVisualRow = {
   syntaxChunks: TextChunk[] | null;
 };
 
+export type DiffSplitSide = "old" | "new";
+
 export type FullFileLineHighlight = "added" | "modified";
 
 export function formatDiffRows(line: DiffLineRef, width: number, syntaxChunks?: TextChunk[]): DiffVisualRow[] {
@@ -36,6 +38,27 @@ export function formatDiffRows(line: DiffLineRef, width: number, syntaxChunks?: 
   const textRows = wrapTextLineWithOffsets(line.text, contentWidth);
   return textRows.map(({ text, start }, index) => ({
     lineNumber: index === 0 ? formatLineNumber(diffDisplayLineNumber(line)) : " ".repeat(DIFF_LINE_NUMBER_WIDTH),
+    sign: index === 0 ? diffLineSign(line) : " ",
+    text,
+    syntaxChunks: line.kind === "hunk" || !syntaxChunks ? null : sliceTextChunks(syntaxChunks, start, text.length),
+  }));
+}
+
+export function formatDiffSplitRows(line: DiffLineRef, width: number, side: DiffSplitSide, syntaxChunks?: TextChunk[]): DiffVisualRow[] {
+  if (line.kind === "file") {
+    return [{
+      lineNumber: " ".repeat(DIFF_LINE_NUMBER_WIDTH),
+      sign: " ",
+      text: line.text,
+      syntaxChunks: null,
+    }];
+  }
+
+  const usableWidth = Math.max(1, width);
+  const contentWidth = Math.max(1, usableWidth - diffLinePrefixWidth());
+  const textRows = wrapTextLineWithOffsets(line.text, contentWidth);
+  return textRows.map(({ text, start }, index) => ({
+    lineNumber: index === 0 ? formatLineNumber(splitDiffDisplayLineNumber(line, side)) : " ".repeat(DIFF_LINE_NUMBER_WIDTH),
     sign: index === 0 ? diffLineSign(line) : " ",
     text,
     syntaxChunks: line.kind === "hunk" || !syntaxChunks ? null : sliceTextChunks(syntaxChunks, start, text.length),
@@ -80,6 +103,49 @@ export function formatDiffViewportDiffRow(row: DiffVisualRow, width: number, con
   }
   appendDiffVerticalBorder(chunks, borderFg);
   return new StyledText(chunks);
+}
+
+export function formatDiffViewportSplitDiffRow(
+  oldRow: DiffVisualRow | null,
+  newRow: DiffVisualRow | null,
+  width: number,
+  oldStyle: TextStyle,
+  newStyle: TextStyle,
+  hasLeftBorder: boolean,
+  borderFg: string,
+): StyledText {
+  const chunks: TextChunk[] = [];
+  if (width <= 1) {
+    appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: borderFg, bg: COLORS.bg });
+    return new StyledText(chunks);
+  }
+
+  if (hasLeftBorder) {
+    appendDiffVerticalBorder(chunks, borderFg);
+  }
+
+  const contentWidth = Math.max(0, width - 1 - (hasLeftBorder ? 1 : 0));
+  if (contentWidth === 0) {
+    appendDiffVerticalBorder(chunks, borderFg);
+    return new StyledText(chunks);
+  }
+
+  const { leftWidth, rightWidth, dividerWidth } = diffSplitCellWidths(width, hasLeftBorder);
+  appendDiffSplitCell(chunks, oldRow, leftWidth, oldStyle);
+  if (dividerWidth > 0) {
+    appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: COLORS.border, bg: COLORS.bg });
+  }
+  appendDiffSplitCell(chunks, newRow, rightWidth, newStyle);
+  appendDiffVerticalBorder(chunks, borderFg);
+  return new StyledText(chunks);
+}
+
+export function diffSplitCellWidths(width: number, hasLeftBorder: boolean): { leftWidth: number; rightWidth: number; dividerWidth: number } {
+  const contentWidth = Math.max(0, width - 1 - (hasLeftBorder ? 1 : 0));
+  const dividerWidth = contentWidth >= 3 ? 1 : 0;
+  const leftWidth = Math.floor((contentWidth - dividerWidth) / 2);
+  const rightWidth = contentWidth - dividerWidth - leftWidth;
+  return { leftWidth, rightWidth, dividerWidth };
 }
 
 export function formatDiffViewportFileHeaderRows(file: DiffFile, width: number, selected: boolean, hasLeadingBorder: boolean, hasLeftBorder: boolean, borderFg: string): StyledText[] {
@@ -275,6 +341,27 @@ function appendDiffVerticalBorder(chunks: TextChunk[], borderFg: string): void {
   appendStyledChunk(chunks, NAV_BORDER.vertical, { fg: borderFg, bg: COLORS.bg });
 }
 
+function appendDiffSplitCell(chunks: TextChunk[], row: DiffVisualRow | null, width: number, style: TextStyle): void {
+  if (width <= 0) {
+    return;
+  }
+  if (!row) {
+    appendStyledChunk(chunks, " ".repeat(width), style);
+    return;
+  }
+
+  const numberStyle = { fg: COLORS.muted, bg: style.bg };
+  let remainingWidth = width;
+  remainingWidth -= appendClippedStyledChunk(chunks, row.lineNumber, remainingWidth, numberStyle);
+  remainingWidth -= appendClippedStyledChunk(chunks, " ", remainingWidth, numberStyle);
+  remainingWidth -= appendClippedStyledChunk(chunks, row.sign, remainingWidth, signStyle(row.sign, style.bg));
+  remainingWidth -= appendClippedStyledChunk(chunks, " ", remainingWidth, style);
+  remainingWidth -= appendDiffTextChunks(chunks, row, remainingWidth, style);
+  if (remainingWidth > 0) {
+    appendStyledChunk(chunks, " ".repeat(remainingWidth), style);
+  }
+}
+
 function appendClippedStyledChunk(chunks: TextChunk[], text: string, width: number, style: TextStyle): number {
   if (width <= 0) {
     return 0;
@@ -350,6 +437,10 @@ function diffDisplayLineNumber(line: DiffLineRef): number | null {
     return null;
   }
   return line.newLine ?? line.oldLine;
+}
+
+function splitDiffDisplayLineNumber(line: DiffLineRef, side: DiffSplitSide): number | null {
+  return side === "old" ? line.oldLine : line.newLine;
 }
 
 function diffLineSign(line: DiffLineRef): string {
