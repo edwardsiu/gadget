@@ -31,7 +31,6 @@ import {
   formatDiffRows,
   formatDiffSplitRows,
   formatDiffViewportDiffRow,
-  formatDiffViewportFileHeaderRows,
   formatDiffViewportRow,
   formatDiffViewportSplitDiffRow,
   fullFileLineHighlights,
@@ -1085,40 +1084,6 @@ class GadgetUi {
       const editingReviewComment = this.reviewMode && this.mode === "comment" && this.activeReviewTarget?.key === reviewKey;
       const editingFeedbackComment = this.feedbackMode && this.mode === "comment" && this.activeFeedbackTarget?.key === feedbackKey;
       const editingAnnotationComment = editingReviewComment || editingFeedbackComment;
-      if (line.kind === "file") {
-        const headerFile = this.fileForPath(line.filePath) ?? file;
-        const headerRows = formatDiffViewportFileHeaderRows(headerFile, diffWidth, selected, index > 0, hasLeftBorder, borderFg);
-        const lineRows: TextRenderable[] = [];
-        headerRows.forEach((content, rowIndex) => {
-          const row = view.createTextRenderable({
-            id: `gadget-line-${index}-${rowIndex}`,
-            height: 1,
-            width: diffWidth,
-            fg: COLORS.text,
-            bg: COLORS.bg,
-            truncate: true,
-            content,
-            selectable: false,
-            onMouseDown: (event) => {
-              if (event.button !== MouseButton.LEFT) {
-                return;
-              }
-              if (this.shouldIgnoreDiffClick()) {
-                return;
-              }
-              this.selectedLineIndex = index;
-              this.revealSelectedLine = true;
-              this.renderAll();
-            },
-          });
-          view.diffScroll.add(row);
-          this.lineIds.push(row.id);
-          lineRows.push(row);
-          renderedRows += 1;
-        });
-        this.lineRenderables.set(index, lineRows);
-        return;
-      }
       formatDiffRows(line, diffContentWidth, this.syntaxLineChunks.get(line.id)).forEach((content, rowIndex) => {
         const row = view.createTextRenderable({
           id: `gadget-line-${index}-${rowIndex}`,
@@ -1245,37 +1210,6 @@ class GadgetUi {
       return 0;
     }
     const selected = index === this.selectedLineIndex;
-    if (line.kind === "file") {
-      const headerFile = this.fileForPath(line.filePath) ?? file;
-      const headerRows = formatDiffViewportFileHeaderRows(headerFile, diffWidth, selected, index > 0, hasLeftBorder, borderFg);
-      const lineRows: TextRenderable[] = [];
-      headerRows.forEach((content, rowIndex) => {
-        const row = view.createTextRenderable({
-          id: `gadget-line-${index}-${rowIndex}`,
-          height: 1,
-          width: diffWidth,
-          fg: COLORS.text,
-          bg: COLORS.bg,
-          truncate: true,
-          content,
-          selectable: false,
-          onMouseDown: (event) => {
-            if (event.button !== MouseButton.LEFT || this.shouldIgnoreDiffClick()) {
-              return;
-            }
-            this.selectedLineIndex = index;
-            this.revealSelectedLine = true;
-            this.renderAll();
-          },
-        });
-        view.diffScroll.add(row);
-        this.lineIds.push(row.id);
-        lineRows.push(row);
-      });
-      this.lineRenderables.set(index, lineRows);
-      return headerRows.length;
-    }
-
     const diffContentWidth = this.diffContentWidth();
     const visualRows = formatDiffRows(line, diffContentWidth, this.syntaxLineChunks.get(line.id));
     const lineRows: TextRenderable[] = [];
@@ -2759,10 +2693,7 @@ class GadgetUi {
     return [...new Set([unit.oldIndex, unit.newIndex].filter((index): index is number => index !== null))];
   }
 
-  private diffLineVisualHeight(line: DiffLineRef, lineIndex = this.selectedLineIndex): number {
-    if (line.kind === "file") {
-      return lineIndex > 0 ? 4 : 2;
-    }
+  private diffLineVisualHeight(line: DiffLineRef, _lineIndex = this.selectedLineIndex): number {
     const lineHeight = formatDiffRows(line, this.diffContentWidth()).length;
     if (!this.isAnnotationMode()) {
       return lineHeight;
@@ -3956,7 +3887,7 @@ class GadgetUi {
     if (this.fileViewMode === "file") {
       return this.fullFileLines.get(file.filePath) ?? [currentFileStatusLine(file.filePath, "Loading current file...")];
     }
-    return file.lines;
+    return file.lines.filter((line) => line.kind !== "file");
   }
 
   private fileHasDiff(file: DiffFile): boolean {
