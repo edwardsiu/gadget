@@ -101,7 +101,6 @@ import {
 
 type InputMode = "none" | "comment" | "file-search" | "feedback-content";
 type FileViewMode = "diff" | "file";
-type DiffBaseOverrideSource = "github" | "manual";
 type DiffRenderingMode = "unified" | "split";
 const MAX_SESSION_CHOICE_ROWS = 10;
 const MAX_FEEDBACK_STATUS_SUMMARY_LENGTH = 80;
@@ -215,9 +214,7 @@ class GadgetUi {
   private diffBaseLoading = false;
   private diffBaseError: string | null = null;
   private diffBaseOverride: string | null = null;
-  private diffBaseOverrideSource: DiffBaseOverrideSource | null = null;
   private diffBaseLoadGeneration = 0;
-  private githubDiffBaseLoadGeneration = 0;
   private searchableFiles: string[] = [];
   private searchableFileEntries: SearchableFileEntry[] = [];
   private searchableFilesLoaded = false;
@@ -350,7 +347,6 @@ class GadgetUi {
     await Promise.all([connectPromise, trackedDiffPromise]);
     await this.openInitialFileTarget();
     void this.refreshDiffAndRender().catch((error) => this.setStatus(error.message));
-    void this.refreshGitHubDiffBase().catch(() => undefined);
   }
 
   private handleResize(): void {
@@ -2511,7 +2507,6 @@ class GadgetUi {
       this.selectCurrentDiffBaseCandidate();
       this.clampDiffBaseModalScrollOffset();
       this.renderAll();
-      void this.refreshDiffBaseCandidatesWithPullRequest(generation);
     } catch (error) {
       if (generation !== this.diffBaseLoadGeneration) {
         return;
@@ -2520,51 +2515,6 @@ class GadgetUi {
       this.diffBaseError = `Could not load diff bases: ${error instanceof Error ? error.message : String(error)}`;
       this.renderAll();
     }
-  }
-
-  private async refreshDiffBaseCandidatesWithPullRequest(generation: number): Promise<void> {
-    const candidates = await listDiffBaseCandidates(this.state.cwd, { includePullRequestBase: true }).catch(() => null);
-    if (!candidates) {
-      return;
-    }
-    if (generation !== this.diffBaseLoadGeneration || !this.diffBaseModalOpen) {
-      return;
-    }
-    this.diffBaseCandidates = candidates;
-    this.selectCurrentDiffBaseCandidate();
-    this.clampDiffBaseModalScrollOffset();
-    this.renderAll();
-  }
-
-  private async refreshGitHubDiffBase(): Promise<void> {
-    const generation = this.githubDiffBaseLoadGeneration + 1;
-    this.githubDiffBaseLoadGeneration = generation;
-    const branchName = this.state.branchName;
-    const candidates = await listDiffBaseCandidates(this.state.cwd, { includePullRequestBase: true });
-    if (
-      generation !== this.githubDiffBaseLoadGeneration ||
-      this.shuttingDown ||
-      this.state.branchName !== branchName ||
-      this.diffBaseOverrideSource === "manual"
-    ) {
-      return;
-    }
-
-    if (this.diffBaseModalOpen) {
-      this.diffBaseCandidates = candidates;
-      this.selectCurrentDiffBaseCandidate();
-      this.renderAll();
-    }
-
-    const githubCandidate = candidates.find((candidate) => candidate.source === "github");
-    if (!githubCandidate || githubCandidate.mergeBase === this.state.baseRef) {
-      return;
-    }
-
-    this.diffBaseOverride = githubCandidate.ref;
-    this.diffBaseOverrideSource = "github";
-    this.setStatus(`diff base updated from GitHub: ${githubCandidate.label}`);
-    await this.refreshDiffAndRender({ baseRef: githubCandidate.ref });
   }
 
   private selectCurrentDiffBaseCandidate(): void {
@@ -2595,7 +2545,6 @@ class GadgetUi {
       return;
     }
     this.diffBaseOverride = candidate.ref;
-    this.diffBaseOverrideSource = "manual";
     this.diffBaseModalOpen = false;
     this.setStatus(`diff base: ${candidate.label}`);
     await this.refreshDiffAndRender({ baseRef: candidate.ref });

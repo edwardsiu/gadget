@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { DiffFile, DiffLineRef, DiffState } from "./types";
 
 const DIFF_CONTEXT_LINES = 3;
+const MAX_LOCAL_DIFF_BASE_REFS = 48;
 
 export type DiffWatcher = {
   close(): Promise<void>;
@@ -14,7 +15,7 @@ export type ReadDiffStateOptions = {
   gitInfo?: GitInfo;
 };
 
-export type DiffBaseCandidateSource = "github" | "config" | "upstream" | "default";
+export type DiffBaseCandidateSource = "config" | "upstream" | "local" | "default";
 
 export type DiffBaseCandidate = {
   ref: string;
@@ -22,10 +23,6 @@ export type DiffBaseCandidate = {
   label: string;
   detail: string;
   source: DiffBaseCandidateSource;
-};
-
-export type DiffBaseCandidateOptions = {
-  includePullRequestBase?: boolean;
 };
 
 export type GitInfo = {
@@ -63,14 +60,6 @@ async function runCommand(cwd: string, command: string, args: string[], options:
     throw new Error(stderr.trim() || `${command} ${args.join(" ")} failed`);
   }
   return stdout;
-}
-
-async function tryCommand(cwd: string, command: string, args: string[], options: { timeoutMs?: number } = {}): Promise<string | null> {
-  try {
-    return await runCommand(cwd, command, args, options);
-  } catch {
-    return null;
-  }
 }
 
 export async function tryGit(cwd: string, args: string[]): Promise<string | null> {
@@ -142,41 +131,52 @@ export async function findBranchDiffBase(cwd: string): Promise<string> {
   return (await resolveDiffBase(cwd)).mergeBase;
 }
 
-export async function listDiffBaseCandidates(cwd: string, options: DiffBaseCandidateOptions = {}): Promise<DiffBaseCandidate[]> {
-  const currentBranchPromise = readCurrentBranch(cwd);
-  const pullRequestRefsPromise = options.includePullRequestBase ? pullRequestBaseRefs(cwd) : Promise.resolve([]);
-  const defaultRefsPromise = defaultDiffBaseRefs(cwd);
-  const currentBranch = await currentBranchPromise;
-  const [pullRequestRefs, configuredRefs, upstreamRefs, defaultRefs] = await Promise.all([
-    pullRequestRefsPromise,
+export async function listDiffBaseCandidates(cwd: string): Promise<DiffBaseCandidate[]> {
+  const currentBranch = await readCurrentBranch(cwd);
+  const [configuredRefs, upstreamRefs, defaultRefs, localRefs] = await Promise.all([
     configuredDiffBaseRefs(cwd, currentBranch),
     upstreamDiffBaseRefs(cwd, currentBranch),
-    defaultRefsPromise,
+    defaultDiffBaseRefs(cwd),
+    localDiffBaseRefs(cwd, currentBranch),
   ]);
   const refs = uniqueDiffBaseRefs([
-    ...pullRequestRefs,
     ...configuredRefs,
     ...upstreamRefs,
     ...defaultRefs,
+    ...localRefs,
   ]);
 
-  const candidates: DiffBaseCandidate[] = [];
-  const seenMergeBases = new Set<string>();
-  const mergeBaseResults = await Promise.all(refs.map(async (ref) => ({
+  const resolvedCandidates = (await Promise.all(refs.map(async (ref, index) => ({
     ref,
     mergeBase: (await tryReadOnlyGit(cwd, ["merge-base", "HEAD", ref.ref]))?.trim(),
-  })));
-  for (const { ref, mergeBase } of mergeBaseResults) {
-    if (!mergeBase || seenMergeBases.has(mergeBase)) {
+    distanceFromHead: null as number | null,
+    order: index,
+  })))).filter((candidate): candidate is ResolvedDiffBaseCandidate => Boolean(candidate.mergeBase));
+
+  await Promise.all(resolvedCandidates.map(async (candidate) => {
+    if (candidate.ref.source !== "local") {
+      return;
+    }
+    candidate.distanceFromHead = await countCommitsFromBaseToHead(cwd, candidate.mergeBase);
+  }));
+
+  const preferredByMergeBase = new Map<string, ResolvedDiffBaseCandidate>();
+  for (const candidate of resolvedCandidates) {
+    if (candidate.ref.source === "local" && candidate.distanceFromHead === 0) {
       continue;
     }
-    seenMergeBases.add(mergeBase);
-    candidates.push({
+    const previous = preferredByMergeBase.get(candidate.mergeBase);
+    if (!previous || compareDuplicateDiffBaseCandidates(candidate, previous) < 0) {
+      preferredByMergeBase.set(candidate.mergeBase, candidate);
+    }
+  }
+
+  return [...preferredByMergeBase.values()]
+    .sort(compareDiffBaseCandidates)
+    .map(({ ref, mergeBase }) => ({
       ...ref,
       mergeBase,
-    });
-  }
-  return candidates;
+    }));
 }
 
 async function resolveDiffBase(cwd: string, baseRef?: string): Promise<DiffBaseCandidate> {
@@ -209,25 +209,12 @@ type DiffBaseRef = {
   source: DiffBaseCandidateSource;
 };
 
-async function pullRequestBaseRefs(cwd: string): Promise<DiffBaseRef[]> {
-  const output = (await tryCommand(cwd, "gh", ["pr", "view", "--json", "baseRefName"], { timeoutMs: 2500 }))?.trim();
-  if (!output) {
-    return [];
-  }
-
-  let baseRefName: string | null = null;
-  try {
-    const parsed = JSON.parse(output) as { baseRefName?: unknown };
-    baseRefName = typeof parsed.baseRefName === "string" ? parsed.baseRefName.trim() : null;
-  } catch {
-    return [];
-  }
-
-  if (!baseRefName) {
-    return [];
-  }
-  return branchNameToCandidateRefs(baseRefName, "github", "GitHub PR base");
-}
+type ResolvedDiffBaseCandidate = {
+  ref: DiffBaseRef;
+  mergeBase: string;
+  distanceFromHead: number | null;
+  order: number;
+};
 
 async function configuredDiffBaseRefs(cwd: string, currentBranch: string): Promise<DiffBaseRef[]> {
   if (!isNamedBranch(currentBranch)) {
@@ -259,6 +246,34 @@ async function upstreamDiffBaseRefs(cwd: string, currentBranch: string): Promise
     detail: "upstream",
     source: "upstream",
   }];
+}
+
+async function localDiffBaseRefs(cwd: string, currentBranch: string): Promise<DiffBaseRef[]> {
+  if (!isNamedBranch(currentBranch)) {
+    return [];
+  }
+
+  const output = await tryReadOnlyGit(cwd, [
+    "for-each-ref",
+    `--count=${MAX_LOCAL_DIFF_BASE_REFS}`,
+    "--sort=-committerdate",
+    "--format=%(refname:short)",
+    "refs/heads",
+  ]);
+  if (!output) {
+    return [];
+  }
+
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((label) => label && label !== currentBranch)
+    .map((label) => ({
+      ref: label,
+      label,
+      detail: "local branch point",
+      source: "local" as const,
+    }));
 }
 
 async function defaultDiffBaseRefs(cwd: string): Promise<DiffBaseRef[]> {
@@ -321,6 +336,65 @@ function isExplicitRef(ref: string): boolean {
 
 function remoteBranchName(ref: string): string {
   return ref.replace(/^refs\/remotes\//, "").replace(/^[^/]+\//, "");
+}
+
+async function countCommitsFromBaseToHead(cwd: string, mergeBase: string): Promise<number | null> {
+  const output = (await tryReadOnlyGit(cwd, ["rev-list", "--count", `${mergeBase}..HEAD`]))?.trim();
+  if (!output) {
+    return null;
+  }
+  const count = Number(output);
+  return Number.isFinite(count) ? count : null;
+}
+
+function compareDiffBaseCandidates(left: ResolvedDiffBaseCandidate, right: ResolvedDiffBaseCandidate): number {
+  const sourceDifference = sourceSortRank(left.ref.source) - sourceSortRank(right.ref.source);
+  if (sourceDifference !== 0) {
+    return sourceDifference;
+  }
+
+  if (left.ref.source === "local" && right.ref.source === "local") {
+    const distanceDifference = (left.distanceFromHead ?? Number.MAX_SAFE_INTEGER) - (right.distanceFromHead ?? Number.MAX_SAFE_INTEGER);
+    if (distanceDifference !== 0) {
+      return distanceDifference;
+    }
+  }
+
+  return left.order - right.order;
+}
+
+function compareDuplicateDiffBaseCandidates(left: ResolvedDiffBaseCandidate, right: ResolvedDiffBaseCandidate): number {
+  const sourceDifference = duplicateSourceSortRank(left.ref.source) - duplicateSourceSortRank(right.ref.source);
+  if (sourceDifference !== 0) {
+    return sourceDifference;
+  }
+  return compareDiffBaseCandidates(left, right);
+}
+
+function sourceSortRank(source: DiffBaseCandidateSource): number {
+  switch (source) {
+    case "config":
+      return 0;
+    case "upstream":
+      return 1;
+    case "local":
+      return 2;
+    case "default":
+      return 3;
+  }
+}
+
+function duplicateSourceSortRank(source: DiffBaseCandidateSource): number {
+  switch (source) {
+    case "config":
+      return 0;
+    case "upstream":
+      return 1;
+    case "default":
+      return 2;
+    case "local":
+      return 3;
+  }
 }
 
 async function findOriginDefaultBranch(cwd: string): Promise<string | null> {
