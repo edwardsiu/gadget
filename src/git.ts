@@ -1,9 +1,11 @@
-import { existsSync, readFileSync, statSync, watch as watchFileSystem, type FSWatcher } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync, watch as watchFileSystem, type Dirent, type FSWatcher } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { DiffFile, DiffLineRef, DiffState } from "./types";
 
 const DIFF_CONTEXT_LINES = 3;
 const MAX_LOCAL_DIFF_BASE_REFS = 48;
+const MAX_SYNTHETIC_DIFF_FILE_SIZE = 1_000_000;
 
 export type DiffWatcher = {
   close(): Promise<void>;
@@ -83,6 +85,10 @@ export async function assertGitRepo(cwd: string): Promise<void> {
 }
 
 export async function readDiffState(cwd: string, options: ReadDiffStateOptions = {}): Promise<DiffState> {
+  if (!(await isGitRepo(cwd))) {
+    return await readFilesystemDiffState(cwd);
+  }
+
   const [baseCandidate, gitInfo] = await Promise.all([
     resolveDiffBase(cwd, options.baseRef),
     options.gitInfo ? Promise.resolve(options.gitInfo) : readGitInfo(cwd),
@@ -103,7 +109,10 @@ export async function readDiffState(cwd: string, options: ReadDiffStateOptions =
 }
 
 export async function listSearchableFiles(cwd: string): Promise<string[]> {
-  const output = await runReadOnlyGit(cwd, ["ls-files", "-co", "--exclude-standard", "-z"]);
+  const output = await tryReadOnlyGit(cwd, ["ls-files", "-co", "--exclude-standard", "-z"]);
+  if (output === null) {
+    return await listFilesystemFiles(cwd);
+  }
   return [...new Set(output.split("\0").filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
@@ -118,7 +127,14 @@ export async function readCurrentBranch(cwd: string): Promise<string> {
 }
 
 export async function readGitInfo(cwd: string): Promise<GitInfo> {
-  const root = (await runReadOnlyGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  const root = await readGitRoot(cwd);
+  if (!root) {
+    return {
+      cwd: resolve(cwd),
+      branchName: "no git",
+    };
+  }
+
   const branchName = await readCurrentBranch(root);
 
   return {
@@ -686,6 +702,128 @@ export function parseUnifiedDiff(diff: string): DiffFile[] {
   return files;
 }
 
+async function isGitRepo(cwd: string): Promise<boolean> {
+  return (await readGitRoot(cwd)) !== null;
+}
+
+async function readGitRoot(cwd: string): Promise<string | null> {
+  return (await tryReadOnlyGit(cwd, ["rev-parse", "--show-toplevel"]))?.trim() || null;
+}
+
+async function readFilesystemDiffState(cwd: string): Promise<DiffState> {
+  const root = resolve(cwd);
+  const files = await readFilesystemDiffs(root);
+  return {
+    cwd: root,
+    baseRef: "filesystem",
+    baseRefLabel: "filesystem",
+    branchName: "no git",
+    files,
+    refreshedAt: Date.now(),
+  };
+}
+
+async function listFilesystemFiles(cwd: string): Promise<string[]> {
+  const root = resolve(cwd);
+  const files: string[] = [];
+  await walkFilesystemFiles(root, root, files);
+  return files.sort((a, b) => a.localeCompare(b));
+}
+
+async function readFilesystemDiffs(cwd: string): Promise<DiffFile[]> {
+  const filePaths = await listFilesystemFiles(cwd);
+  const files: DiffFile[] = [];
+  for (const filePath of filePaths) {
+    const diff = await readAddedFileDiff(cwd, filePath);
+    if (diff) {
+      files.push(diff);
+    }
+  }
+  return files;
+}
+
+async function walkFilesystemFiles(root: string, directory: string, files: string[]): Promise<void> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (entry.name === ".git") {
+      continue;
+    }
+
+    const absolute = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await walkFilesystemFiles(root, absolute, files);
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    files.push(relative(root, absolute).replace(/\\/g, "/"));
+  }
+}
+
+async function readAddedFileDiff(cwd: string, filePath: string): Promise<DiffFile | null> {
+  const absolute = join(cwd, filePath);
+  const file = Bun.file(absolute);
+  if (!(await file.exists())) {
+    return null;
+  }
+  const stat = await file.stat();
+  if (!stat.isFile() || stat.size > MAX_SYNTHETIC_DIFF_FILE_SIZE) {
+    return null;
+  }
+
+  const text = await file.text();
+  const contentLines = splitFileLines(text);
+  const hunkHeader = `@@ -0,0 +1,${contentLines.length} @@`;
+  const lines: DiffLineRef[] = [
+    {
+      id: `${filePath}:0`,
+      filePath,
+      kind: "hunk",
+      oldLine: null,
+      newLine: null,
+      hunkHeader,
+      text: hunkHeader,
+      raw: hunkHeader,
+    },
+  ];
+
+  contentLines.forEach((line, index) => {
+    lines.push({
+      id: `${filePath}:${index + 1}`,
+      filePath,
+      kind: "add",
+      oldLine: null,
+      newLine: index + 1,
+      hunkHeader,
+      text: line,
+      raw: `+${line}`,
+    });
+  });
+
+  return {
+    filePath,
+    additions: contentLines.length,
+    removals: 0,
+    lines,
+    rawDiff: [`diff --git a/${filePath} b/${filePath}`, "new file mode 100644", "--- /dev/null", `+++ b/${filePath}`, hunkHeader, ...contentLines.map((line) => `+${line}`)].join("\n"),
+  };
+}
+
+function splitFileLines(text: string): string[] {
+  if (text.length === 0) {
+    return [];
+  }
+  return (text.endsWith("\n") ? text.slice(0, -1) : text).split(/\r?\n/);
+}
+
 export function hunkForLine(file: DiffFile, selected: DiffLineRef, radius = 4): string {
   const index = file.lines.findIndex((line) => line.id === selected.id);
   if (index < 0) {
@@ -721,52 +859,10 @@ async function readUntrackedDiffs(cwd: string): Promise<DiffFile[]> {
       continue;
     }
     const filePath = entry.slice(3);
-    const absolute = join(cwd, filePath);
-    const file = Bun.file(absolute);
-    if (!(await file.exists())) {
-      continue;
+    const diff = await readAddedFileDiff(cwd, filePath);
+    if (diff) {
+      files.push(diff);
     }
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.size > 1_000_000) {
-      continue;
-    }
-
-    const text = await file.text();
-    const contentLines = text.endsWith("\n") ? text.slice(0, -1).split(/\r?\n/) : text.split(/\r?\n/);
-    const hunkHeader = `@@ -0,0 +1,${contentLines.length} @@`;
-    const lines: DiffLineRef[] = [
-      {
-        id: `${filePath}:0`,
-        filePath,
-        kind: "hunk",
-        oldLine: null,
-        newLine: null,
-        hunkHeader,
-        text: hunkHeader,
-        raw: hunkHeader,
-      },
-    ];
-
-    contentLines.forEach((line, index) => {
-      lines.push({
-        id: `${filePath}:${index + 1}`,
-        filePath,
-        kind: "add",
-        oldLine: null,
-        newLine: index + 1,
-        hunkHeader,
-        text: line,
-        raw: `+${line}`,
-      });
-    });
-
-    files.push({
-      filePath,
-      additions: contentLines.length,
-      removals: 0,
-      lines,
-      rawDiff: [`diff --git a/${filePath} b/${filePath}`, "new file mode 100644", "--- /dev/null", `+++ b/${filePath}`, hunkHeader, ...contentLines.map((line) => `+${line}`)].join("\n"),
-    });
   }
 
   return files;

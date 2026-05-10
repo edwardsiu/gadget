@@ -4,7 +4,7 @@ import { Command } from "@commander-js/extra-typings";
 import { ClipboardAdapter } from "./adapters/clipboard-adapter";
 import { untrackCmuxSession } from "./adapters/cmux-adapter";
 import { cleanupGadgetResources, type GadgetCleanupResult } from "./adapters/codex-app-server-adapter";
-import { assertGitRepo, readGitInfo, type GitInfo } from "./git";
+import { readGitInfo, type GitInfo } from "./git";
 import { createClaudeRuntimeAdapter, listClaudeRuntimeSessions, startClaudeRuntime } from "./runtimes/claude";
 import { createCodexRuntimeAdapter, listCodexRuntimeSessions, startCodexRuntime } from "./runtimes/codex";
 import { createPiRuntimeAdapter, listPiRuntimeSessions, startPiRuntime } from "./runtimes/pi";
@@ -102,13 +102,11 @@ try {
 
 async function startCommand(options: { model: string | undefined; resumeSessionId: string | undefined }): Promise<void> {
   const cwd = process.cwd();
-  await ensureGitRepo(cwd);
   await startRuntimeOrExit(cwd, startOptions(options.model, options.resumeSessionId));
 }
 
 async function startClaudeCommand(claudeArgs: string[]): Promise<void> {
   const cwd = process.cwd();
-  await ensureGitRepo(cwd);
   try {
     await startClaudeRuntime(cwd, claudeArgs);
   } catch (error) {
@@ -119,7 +117,6 @@ async function startClaudeCommand(claudeArgs: string[]): Promise<void> {
 
 async function startPiCommand(piArgs: string[]): Promise<void> {
   const cwd = process.cwd();
-  await ensureGitRepo(cwd);
   try {
     await startPiRuntime(cwd, piArgs);
   } catch (error) {
@@ -130,7 +127,6 @@ async function startPiCommand(piArgs: string[]): Promise<void> {
 
 async function openDiffViewer(options: { mode: DiffMode; initialFile?: InitialFileTarget }): Promise<void> {
   const cwd = process.cwd();
-  await ensureGitRepo(cwd);
   const gitInfo = await readGitInfoOrExit(cwd);
   const runTarget = await resolveDiffRunTarget(cwd, gitInfo, options.mode);
 
@@ -207,25 +203,12 @@ function createAdapterForSession(session: RuntimeSession) {
   return createCodexRuntimeAdapter(session);
 }
 
-async function ensureGitRepo(cwd: string): Promise<void> {
-  try {
-    await assertGitRepo(cwd);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    console.error(`Gadget needs a git repository: ${cwd}`);
-    if (detail) {
-      console.error(detail);
-    }
-    process.exit(1);
-  }
-}
-
 async function readGitInfoOrExit(cwd: string): Promise<GitInfo> {
   try {
     return await readGitInfo(cwd);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.error("Gadget needs a git repository.");
+    console.error(`Could not read project info: ${cwd}`);
     if (detail) {
       console.error(detail);
     }
